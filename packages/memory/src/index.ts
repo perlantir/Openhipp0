@@ -18,3 +18,6 @@ export * as contradict from './contradict/index.js';
 
 /** Context compilation: 5-signal scoring + H0C compression (markdown/h0c/ultra). */
 export * as compile from './compile/index.js';
+
+/** Hermes self-learning: skill creation + improvement, memory nudging, session compression. */
+export * as learning from './learning/index.js';
