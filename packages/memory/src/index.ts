@@ -21,3 +21,9 @@ export * as compile from './compile/index.js';
 
 /** Hermes self-learning: skill creation + improvement, memory nudging, session compression. */
 export * as learning from './learning/index.js';
+
+/** Honcho-style incremental user modeling. */
+export * as userModel from './user-model/index.js';
+
+/** Cross-session recall via FTS5. */
+export * as recall from './recall/index.js';
