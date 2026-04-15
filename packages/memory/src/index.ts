@@ -27,3 +27,6 @@ export * as userModel from './user-model/index.js';
 
 /** Cross-session recall via FTS5. */
 export * as recall from './recall/index.js';
+
+/** @openhipp0/core MemoryAdapter implementation that wires all the above together. */
+export * as adapter from './adapter/index.js';

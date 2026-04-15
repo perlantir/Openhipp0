@@ -15,3 +15,37 @@ export * as tools from './tools/index.js';
 
 /** Agent runtime loop. */
 export * as agent from './agent/index.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Top-level re-exports — the handful of types that cross package boundaries
+// (memory package's MemoryAdapter implementation, external SDK consumers).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type {
+  AgentIdentity,
+  AgentResponse,
+  AgentRuntimeConfig,
+  AgentRuntimeHooks,
+  AgentSystemPromptSection,
+  CompileContextRequest,
+  CompiledContext,
+  HandleMessageRequest,
+  MemoryAdapter,
+  SessionSummary,
+  StoppedReason,
+} from './agent/index.js';
+
+export type {
+  ContentBlock,
+  LLMProvider,
+  Message,
+  TextBlock,
+  ToolDef,
+  ToolResultBlock,
+  ToolUseBlock,
+} from './llm/index.js';
+
+// Runtime classes consumed by external packages (memory adapter, SDK).
+export { AgentRuntime } from './agent/index.js';
+export { LLMClient } from './llm/index.js';
+export { ToolRegistry } from './tools/index.js';
