@@ -2,7 +2,7 @@
 //
 // Phase 1e: LLM (types, circuit breaker, retry, cost, providers, client).
 // Phase 1f: Tools (registry, path/domain guard, sandbox, built-in tools).
-// Phase 1g: Agent runtime loop (next).
+// Phase 1g: Agent runtime loop (prompt builder, decision protocol, main loop).
 
 export const packageName = '@openhipp0/core' as const;
 export const version = '0.0.0' as const;
@@ -12,3 +12,6 @@ export * as llm from './llm/index.js';
 
 /** Tool execution: registry, permissions, path guard, sandbox, built-ins. */
 export * as tools from './tools/index.js';
+
+/** Agent runtime loop. */
+export * as agent from './agent/index.js';
