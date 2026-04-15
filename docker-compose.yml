@@ -1,0 +1,32 @@
+# Open Hipp0 — local development services
+# Production deployment lives under deployment/ (added in Phase 8).
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down
+# Reset:  docker compose down -v   # also drops the volume
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: hipp0-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hipp0}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hipp0_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-hipp0}
+      # pgvector extension is preinstalled in this image; memory/db/migrate.ts
+      # runs `CREATE EXTENSION IF NOT EXISTS vector;` on first migrate.
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - hipp0-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-hipp0} -d ${POSTGRES_DB:-hipp0}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  hipp0-pgdata:
+    name: hipp0-pgdata
