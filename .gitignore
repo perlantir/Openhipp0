@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Turbo
+.turbo/
+
+# Test coverage
+coverage/
+*.lcov
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.example.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Hipp0 runtime data (local dev should not commit user data)
+hipp0.db
+hipp0.db-*
+*.sqlite
+*.sqlite-*
+.hipp0/
+
+# Python (for python-sdk)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Misc
+*.tmp
+*.bak
+.cache/

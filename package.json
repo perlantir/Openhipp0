@@ -1,0 +1,23 @@
+{
+  "name": "open-hipp0",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Open Hipp0 — local-first autonomous AI agent platform with persistent decision memory and self-learning",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2"
+  }
+}
