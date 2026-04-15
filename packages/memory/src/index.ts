@@ -12,3 +12,6 @@ export * as db from './db/index.js';
 
 /** Hipp0 decision graph: CRUD, embeddings, tags, semantic/tag search. */
 export * as decisions from './decisions/index.js';
+
+/** Contradiction detection + edge recording. */
+export * as contradict from './contradict/index.js';
