@@ -177,6 +177,61 @@ CONFIDENCE: high | medium | low
 - AFFECTS: All source/test imports.
 - CONFIDENCE: high
 
+### Phase 1d — Database (Drizzle/SQLite)
+
+**DECISION:** SQLite-only in 1d; Postgres schema mirror deferred to Phase 2.x
+
+- REASONING: Drizzle requires separate schemas per dialect (sqlite-core vs pg-core). Shipping both doubles code volume without value while dev-first phases don't need Docker. `client.ts` throws `Hipp0NotImplementedError` with a clear message on `postgres://` URLs.
+- ALTERNATIVES_REJECTED: Thin abstraction over both dialects — accumulates complexity and bugs for no phase-1 benefit.
+- AFFECTS: `packages/memory/src/db/`. Postgres schema mirror + migrations added when deploying.
+- CONFIDENCE: high (for now).
+
+**DECISION:** FTS5 virtual table declared via raw SQL in `migrate.ts`, not Drizzle
+
+- REASONING: Drizzle doesn't model SQLite virtual tables or FTS5 triggers. The FTS5 mirror of `session_history.full_text` is created post-migration with raw SQL and triggers that keep it in sync on INSERT/UPDATE/DELETE.
+- AFFECTS: `packages/memory/src/db/migrate.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Drizzle 0.36 index extra-config returns an object, not an array
+
+- REASONING: 0.36's `SQLiteTableExtraConfig` type is `Record<string, IndexBuilder>`. Array syntax is 0.38+. Runtime accepts both; TS rejects arrays pre-0.38.
+- AFFECTS: All `sqliteTable(..., (t) => ({...}))` sites in schema.ts.
+- CONFIDENCE: high.
+
+**DECISION:** UUID v4 primary keys + ISO 8601 UTC timestamps (not INTEGER/epoch)
+
+- REASONING: Same row identity works across SQLite and Postgres. Human-readable timestamps make DB inspection + logs easier. Small storage cost.
+- ALTERNATIVES_REJECTED: AUTOINCREMENT integer PKs — don't survive dialect swap; collide on merge.
+- CONFIDENCE: high.
+
+### Phase 1e — LLM abstraction
+
+**DECISION:** Faux-streaming in 1e-ii providers (chat wraps chatSync + yields derived chunks)
+
+- REASONING: True incremental streaming across three SDKs is ~3× the implementation and test surface. The AsyncGenerator contract is honored — callers migrate to real streaming later without a shape change. Documented in each provider's file docstring.
+- ALTERNATIVES_REJECTED: Implement real streaming now — triples Phase 1e scope without user-visible benefit in the agent loop (which assembles the full response before acting anyway).
+- AFFECTS: `provider-anthropic.ts`, `provider-openai.ts`, `provider-ollama.ts`. Iteration target for Phase 2.
+- CONFIDENCE: medium. Revisit when the dashboard needs live streaming.
+
+**DECISION:** `override readonly cause: unknown` on `Hipp0RetryExhaustedError`
+
+- REASONING: Node 16.9+ added `Error.cause`. TS's `noImplicitOverride` flags the collision; `override` is the correct narrowing.
+- AFFECTS: `packages/core/src/llm/types.ts`. Useful pattern for any future error class that shadows `name`/`message`/`cause`/`stack`.
+- CONFIDENCE: high.
+
+**DECISION:** `ProviderFactory` injection point in `LLMClient` constructor
+
+- REASONING: Tests construct providers from fake LLMProvider instances via `(cfg) => fakeProvider`, avoiding SDK mocking. The factory is an escape hatch for deterministic testing without polluting the production API.
+- ALTERNATIVES_REJECTED: Mock `@anthropic-ai/sdk`/`openai` via `vi.mock()` — fragile across SDK versions.
+- AFFECTS: Client tests. Keep the factory signature stable.
+- CONFIDENCE: high.
+
+**DECISION:** Budget-exceeded errors fail fast — not tried against next provider
+
+- REASONING: Spend doesn't recover by switching providers. Failing over would just rack up more cost on the secondary. Explicit `if (err instanceof Hipp0BudgetExceededError) throw err;` in the client's failover loop.
+- AFFECTS: `LLMClient.chatSync` / `LLMClient.chat`.
+- CONFIDENCE: high.
+
 ---
 
 ## Coding Standards
