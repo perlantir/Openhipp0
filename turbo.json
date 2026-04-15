@@ -7,6 +7,9 @@
       "outputs": ["dist/**", "!dist/**/*.test.*"]
     },
     "test": {
+      "dependsOn": ["^build"]
+    },
+    "test:coverage": {
       "dependsOn": ["^build"],
       "outputs": ["coverage/**"]
     },

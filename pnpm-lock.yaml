@@ -36,6 +36,22 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.17)
 
+  packages/bridge: {}
+
+  packages/cli: {}
+
+  packages/core: {}
+
+  packages/dashboard: {}
+
+  packages/memory: {}
+
+  packages/scheduler: {}
+
+  packages/sdk: {}
+
+  packages/watchdog: {}
+
 packages:
 
   '@esbuild/aix-ppc64@0.27.7':

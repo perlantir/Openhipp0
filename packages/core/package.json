@@ -1,0 +1,21 @@
+{
+  "name": "@openhipp0/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent runtime, LLM abstraction, tool execution, orchestrator",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:integration": "vitest run tests/integration",
+    "test:smoke": "vitest run tests/smoke.test.ts",
+    "lint": "eslint src tests --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo coverage"
+  }
+}
