@@ -15,3 +15,6 @@ export * as decisions from './decisions/index.js';
 
 /** Contradiction detection + edge recording. */
 export * as contradict from './contradict/index.js';
+
+/** Context compilation: 5-signal scoring + H0C compression (markdown/h0c/ultra). */
+export * as compile from './compile/index.js';
