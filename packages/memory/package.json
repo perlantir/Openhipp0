@@ -16,6 +16,16 @@
     "test:smoke": "vitest run tests/smoke.test.ts",
     "lint": "eslint src tests --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist .turbo coverage"
+    "clean": "rm -rf dist .turbo coverage",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "drizzle-orm": "^0.36.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.28.1"
   }
 }
