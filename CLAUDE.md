@@ -232,6 +232,162 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `LLMClient.chatSync` / `LLMClient.chat`.
 - CONFIDENCE: high.
 
+### Phase 1f — Tool engine
+
+**DECISION:** `Tool.validator` widens input type to `unknown` (not `P`)
+
+- REASONING: Zod schemas using `.default(...)` / `.optional()` have optional-input but required-output types. A narrow `z.ZodType<P>` rejects these. Widening input to `unknown` matches the registry's actual data flow (raw JSON from the LLM) and keeps runtime behavior intact.
+- AFFECTS: `packages/core/src/tools/types.ts` Tool interface.
+- CONFIDENCE: high.
+
+**DECISION:** Native sandbox uses `detached: true` + `process.kill(-pid, sig)` for timeout kills
+
+- REASONING: `sh -c "sleep 5"` forks sleep; killing sh alone leaves sleep orphaned + holding stdio pipes → `close` never fires → 5s hang. `detached: true` makes the child the head of its own process group; signaling `-pid` reaches every descendant.
+- ALTERNATIVES_REJECTED: `tree-kill` library — unnecessary dependency for a 3-line Linux-specific fix.
+- AFFECTS: `packages/core/src/tools/sandbox.ts`. Windows needs a different strategy (noted but not in Phase 1 scope).
+- CONFIDENCE: high.
+
+**DECISION:** Tool errors become `ok=false` `ToolResult`s, not thrown
+
+- REASONING: The agent loop inspects results and forwards them as `tool_result` blocks to the LLM; thrown errors would abort the loop. Unexpected implementation bugs (not `Hipp0ToolError`) still throw — the runtime should treat those as fatal.
+- AFFECTS: `ToolRegistry.execute`, every built-in tool.
+- CONFIDENCE: high.
+
+### Phase 1g — Agent runtime
+
+**DECISION:** Three stop conditions beyond `end_turn`: `max_iterations`, `tool_error_cascade` (3 consecutive error iterations), `llm_stop_reason`
+
+- REASONING: Each signals a distinct failure mode. Distinguishing them in `stoppedReason` gives observability without requiring log parsing.
+- AFFECTS: `AgentRuntime`, `AgentResponse.stoppedReason`.
+- CONFIDENCE: high.
+
+**DECISION:** `MemoryAdapter` defined as an interface in core; concrete implementation in `@openhipp0/memory/adapter`
+
+- REASONING: Core stays memory-agnostic. Phase 1g ships `NoopMemoryAdapter`; Phase 2f's `Hipp0MemoryAdapter` wires it in.
+- AFFECTS: `packages/core/src/agent/types.ts`, `packages/memory/src/adapter/`.
+- CONFIDENCE: high.
+
+### Phase 2a — Decision graph
+
+**DECISION:** Two embedding providers in-tree: `OpenAIEmbeddingProvider` + `DeterministicEmbeddingProvider`
+
+- REASONING: Tests need deterministic vectors with weakly-meaningful similarity (n-gram hash splash over neighbors). Offline dev needs a local fallback. Real deploys use OpenAI.
+- AFFECTS: `packages/memory/src/decisions/embeddings.ts`. Local transformer.js option is Phase 8.
+- CONFIDENCE: high.
+
+**DECISION:** Stemmer drops the `es$` rule
+
+- REASONING: `es$ → ''` turns `databases` into `databas` (wrong); `processes → process` only works by luck. `s$` alone covers plurals correctly (`databases → database`, `cats → cat`); `sses$`/`ies$` handle the awkward cases.
+- AFFECTS: `packages/memory/src/decisions/tags.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Drizzle's `db.$client` exposed for raw SQL; no custom `$raw` alias
+
+- REASONING: Drizzle 0.36 already exposes the better-sqlite3 handle as `$client`. Our previous `$raw` cast conflicted with its types.
+- AFFECTS: `packages/memory/src/db/`, migrations, FTS5 search.
+- CONFIDENCE: high.
+
+**DECISION:** Selective re-embed on `updateDecision`
+
+- REASONING: Re-embed only when `title` or `reasoning` changes. Updates to `tags`, `status`, `supersededBy` don't need a new vector — saves API cost + preserves bytes.
+- AFFECTS: `packages/memory/src/decisions/record.ts`.
+- CONFIDENCE: high.
+
+### Phase 2b — Contradiction detection
+
+**DECISION:** Three-way stance classification (`aversive` / `positive` / `neutral`) instead of binary negation
+
+- REASONING: "Do not use Redis" and "Avoid Redis" are both aversive stances that agree on the conclusion. Earlier binary negation-flip heuristic flagged them as opposing. Unifying negation particles + aversive verbs into a single "aversive" bucket fixes the false positive.
+- ALTERNATIVES_REJECTED: Purely LLM-based detection — too expensive at every write, and the heuristic is fine for the hard-band (sim ≥ 0.85).
+- AFFECTS: `packages/memory/src/contradict/detect.ts`.
+- CONFIDENCE: medium. Benchmark once a corpus exists (target 0.92 F1).
+
+**DECISION:** Two similarity bands with different detectors: `≥0.85` heuristic, `0.70–0.85` classifier (optional)
+
+- REASONING: High similarity + stance mismatch is very likely a contradiction (deterministic heuristic is safe). Medium similarity is ambiguous — only invoke the LLM when the caller supplies a classifier.
+- AFFECTS: `detectContradictions` thresholds.
+- CONFIDENCE: medium.
+
+### Phase 2c — Context compilation + H0C
+
+**DECISION:** Fixed 5-signal weights (0.35 / 0.20 / 0.15 / 0.15 / 0.15), override-able per call
+
+- REASONING: Matches the spec. `DEFAULT_WEIGHTS` asserts sum = 1.0 in tests. Deployments with different priors can pass `weights: Partial<ScoringWeights>`.
+- AFFECTS: `scoring.ts`.
+- CONFIDENCE: medium (spec-supplied numbers; tune after real usage data).
+
+**DECISION:** Auto-degrade chain for compression: `markdown → h0c → ultra → truncate`
+
+- REASONING: Caller asks for a format + token budget; we honor the budget over the format. `autoDegrade: false` opts out for strict rendering.
+- AFFECTS: `compileFromDecisions`, reported via `meta.degraded` / `meta.formatUsed`.
+- CONFIDENCE: high.
+
+**DECISION:** `AgentSystemPromptSection` defined locally in `packages/memory/src/compile/types.ts`
+
+- REASONING: Core and memory both want this shape. Defining it locally on both sides (structurally identical) avoids a hard package dependency that would otherwise go both ways (core → memory for the adapter interface, memory → core for Message).
+- AFFECTS: Compile output. Phase 2f kept this even after adding the core dep — the structural match is robust.
+- CONFIDENCE: medium.
+
+### Phase 2d — Self-learning loop (Hermes)
+
+**DECISION:** Skill dedup computes embeddings on the fly; embeddings not stored on the skills table
+
+- REASONING: Small volume in early phases (<1000 skills/project). Storing them doubles write cost without noticeable read win. When volumes grow, add an `embedding` column + an index in a Phase 2.x schema bump.
+- AFFECTS: `maybeCreateSkill`.
+- CONFIDENCE: medium.
+
+**DECISION:** All learning primitives take callback interfaces (`SkillWriter`, `SkillImprover`, `FactExtractor`, `ConversationSummarizer`)
+
+- REASONING: Keeps the learning module DB-pure + testable with deterministic stubs. LLM wiring is the adapter's job (Phase 2f).
+- AFFECTS: `packages/memory/src/learning/`.
+- CONFIDENCE: high.
+
+**DECISION:** Conversation compression preserves first 2 + last 5 turns; 70% context threshold
+
+- REASONING: Spec numbers. First 2 carry the initial intent; last 5 carry active state. 70% leaves room for the next response without another immediate compress.
+- AFFECTS: `maybeCompressSession`.
+- CONFIDENCE: medium.
+
+**DECISION:** Prompt-injection scan is allowlist-poor / blocklist-based
+
+- REASONING: False positives are acceptable (entry is dropped, logged); false negatives poison future context. The blocklist catches the common shapes; semantic detection is a Phase 5 policy engine concern.
+- AFFECTS: `looksLikePromptInjection`.
+- CONFIDENCE: medium.
+
+### Phase 2e — User model + recall
+
+**DECISION:** `riskTolerance='medium'` treated as "not set" in `renderUserModelSnippet`
+
+- REASONING: It's the default. Surfacing it adds noise to every system prompt without information.
+- AFFECTS: Prompt rendering only — stored column is untouched.
+- CONFIDENCE: high.
+
+**DECISION:** FTS5 search uses raw SQL (two queries: FTS MATCH + rowid join)
+
+- REASONING: Drizzle doesn't model virtual tables. FTS5's rowid ties into the main table's rowid; a `WHERE rowid IN (...)` join hydrates rows while preserving rank order.
+- AFFECTS: `packages/memory/src/recall/search.ts`.
+- CONFIDENCE: high.
+
+### Phase 2f — Adapter + cross-package re-exports
+
+**DECISION:** `@openhipp0/core` re-exports key types + classes at the package root
+
+- REASONING: Namespace-only exports (`export * as agent`) force consumers to write `agent.AgentRuntime`, which pushes adapter code into awkward shapes. Re-exporting at the root alongside namespaces gives both options with zero cost.
+- AFFECTS: `packages/core/src/index.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Every side effect in `Hipp0MemoryAdapter.recordSession` is independently try/catched
+
+- REASONING: Skill creation / nudge / user-model / compression failures must never break the primary "session row was persisted" guarantee. They're also independent — one failure shouldn't cascade into the others.
+- AFFECTS: `hipp0-adapter.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** `Hipp0MemoryAdapter.compileContext` does NOT swallow errors
+
+- REASONING: Earlier draft wrapped the decision-compiling block in a broad try/catch, which hid a real import bug (`compileFromDecisions` imported from the wrong module). If memory compilation fails, the agent loop should see it.
+- AFFECTS: `hipp0-adapter.ts`.
+- CONFIDENCE: medium — revisit if observability layer gains a quieter degradation path.
+
 ---
 
 ## Coding Standards
