@@ -1,8 +1,8 @@
 /**
  * Public surface of @openhipp0/core/llm.
  *
- * Phase 1e-i exports: types, circuit breaker, retry, cost tracker.
- * Phase 1e-ii will add: providers (Anthropic / OpenAI / Ollama) + client.
+ * Phase 1e-i: types, circuit breaker, retry, cost tracker.
+ * Phase 1e-ii: providers (Anthropic / OpenAI / Ollama) + failover client.
  */
 
 export * from './types.js';
@@ -17,3 +17,13 @@ export {
   type ModelPrice,
   type SpendEntry,
 } from './cost-tracker.js';
+export { AnthropicProvider, type AnthropicProviderOptions } from './provider-anthropic.js';
+export { OpenAIProvider, type OpenAIProviderOptions } from './provider-openai.js';
+export { OllamaProvider, type OllamaProviderOptions, type FetchFn } from './provider-ollama.js';
+export {
+  LLMClient,
+  defaultProviderFactory,
+  type LLMClientHooks,
+  type ProviderFactory,
+  type UsageRecord,
+} from './client.js';
