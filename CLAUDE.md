@@ -858,6 +858,52 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 22 — Cost optimization
+
+**DECISION:** Ship L1 (exact cache), L4 (model router), L6 (prompt cache hooks), L7 (batch adapter) in v1; defer L2 (semantic cache) + L3 (plan cache) + L5 (LLMLingua)
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. L1 is trivial + meaningful, L4 is the biggest structural win, L6 is the biggest per-call win, L7 discounts scheduled paths. L2 has a privacy footgun (one user's paraphrase hits another's cache); L3 rots fast against UI/API changes; L5 only helps long retrieved contexts. Measure first via Phase 20 suites before shipping the cuts.
+- AFFECTS: `packages/core/src/llm/exact-cache.ts`, `router.ts`, `prompt-cache.ts`, `batch.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** ExactCache is an LLMClient constructor option, not a wrapper
+
+- REASONING: The client already owns the provider loop and usage-record pipeline. Putting the cache check inside `chatSync` means: (1) the budget preflight doesn't fire on hits (zero spend correctly reported), (2) the usage hook doesn't double-count cached responses, (3) the cache can zero out the `usage` tokens it returns so metrics reflect actual spend. A wrapper would have to re-implement all of that or plumb state through a side channel.
+- AFFECTS: `LLMClientConfig.cache`, `LLMClient.chatSync`.
+- CONFIDENCE: high.
+
+**DECISION:** LLMClientConfig.cache is structural `{get, set}`, not a concrete `ExactCache` type
+
+- REASONING: Lets operators plug in their own cache (Redis-backed, rate-limited, per-tenant). The in-memory `ExactCache` is the default reference implementation. Structural typing matches the Phase-1e factory/provider pattern.
+- AFFECTS: `LLMClientConfig`.
+- CONFIDENCE: high.
+
+**DECISION:** Model router ladder is haiku → sonnet → opus (never downgrade)
+
+- REASONING: Failover only upgrades. A Haiku call that returns an unreliable classifier-tier answer should try Sonnet, not another Haiku. Downgrade-on-failure (Opus fails → try Sonnet) saves pennies but hides a real production problem (your primary provider is broken) under a successful cheaper call.
+- AFFECTS: `router.laddersFrom`.
+- CONFIDENCE: high.
+
+**DECISION:** Cache breakpoint hints (system/tools/firstN) are opt-in flags on options, not automatic
+
+- REASONING: Ephemeral breakpoints cost +25% of prefix tokens on write. A prefix must be reused at least twice to break even. Automatic "cache everything that looks stable" heuristics could lose money on short-lived sessions. Callers opt in per-surface; providers translate the hint into `cache_control: {type: 'ephemeral'}`.
+- AFFECTS: `prompt-cache.ts`; provider wiring is next-step.
+- CONFIDENCE: high.
+
+**DECISION:** Batch API adapter ships as an in-memory reference provider + shape contract; Anthropic batches SDK wiring deferred
+
+- REASONING: Persistent batch-handle state (batchId → results), SDK polling, and webhook/async callbacks all need real infrastructure on top of what the core package owns. Shipping the contract + a synchronous reference implementation lets the scheduler (Phase 6.1) build against it today; the Anthropic-specific adapter is a thin follow-up.
+- AFFECTS: `batch.ts`.
+- CONFIDENCE: medium.
+
+**DECISION:** Costs dashboard page reads `/api/costs` directly; no client-side aggregation
+
+- REASONING: The server already joins + sums `llm_usage` in the route handler (projectId / agentId / provider filters). Sending raw rows + letting the client aggregate duplicates work and forces pagination decisions on the dashboard. Server-side aggregation matches the existing Audit/Skills/Health page patterns.
+- AFFECTS: `packages/dashboard/src/pages/Costs.tsx`, `packages/memory/src/api/routes.ts` GET /api/costs.
+- CONFIDENCE: high.
+
+---
+
 ### Phase 21 — Prompt injection defense (`core/security/injection`)
 
 **DECISION:** Source-tagging types (`TrustLevel`, `Origin`, `ProvenanceTag`, `TaggedFragment`) live in core, structurally mirrored in memory

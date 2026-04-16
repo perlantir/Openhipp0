@@ -199,6 +199,55 @@ describe('createApiRoutes', () => {
     expect((byAction.body as { events: Array<{ id: string }> }).events[0]?.id).toBe('a2');
   });
 
+  it('GET /api/costs aggregates llm_usage rows + returns totals/byProvider/byModel', async () => {
+    await seedProject(db, 'p1');
+    const client = db.$client;
+    const insert = client.prepare(
+      `INSERT INTO llm_usage (id, project_id, agent_id, provider, model, input_tokens, output_tokens, cost_usd, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run('u1', 'p1', 'a', 'anthropic', 'haiku', 100, 50, 0.001, '2026-04-16T10:00:00Z');
+    insert.run('u2', 'p1', 'a', 'anthropic', 'sonnet', 500, 200, 0.005, '2026-04-16T11:00:00Z');
+    insert.run('u3', 'p1', 'b', 'openai', 'gpt-4o', 300, 150, 0.003, '2026-04-16T12:00:00Z');
+
+    const routes = createApiRoutes({ db });
+    const costs = findRoute(routes, 'GET', '/api/costs');
+    const r = await call(costs, { query: { projectId: 'p1' } });
+    const body = r.body as {
+      rows: Array<{ id: string }>;
+      totals: { costUsd: number; inputTokens: number; outputTokens: number; calls: number };
+      byProvider: Array<{ name: string; calls: number; costUsd: number }>;
+      byModel: Array<{ name: string; calls: number; costUsd: number }>;
+    };
+    expect(body.rows).toHaveLength(3);
+    expect(body.totals.calls).toBe(3);
+    expect(body.totals.costUsd).toBeCloseTo(0.009);
+    expect(body.totals.inputTokens).toBe(900);
+    expect(body.totals.outputTokens).toBe(400);
+    const anthropicBucket = body.byProvider.find((b) => b.name === 'anthropic');
+    expect(anthropicBucket?.calls).toBe(2);
+    expect(anthropicBucket?.costUsd).toBeCloseTo(0.006);
+    expect(body.byModel.find((b) => b.name === 'openai:gpt-4o')?.calls).toBe(1);
+  });
+
+  it('GET /api/costs filters by agentId and provider', async () => {
+    await seedProject(db, 'p1');
+    const client = db.$client;
+    const insert = client.prepare(
+      `INSERT INTO llm_usage (id, project_id, agent_id, provider, model, input_tokens, output_tokens, cost_usd, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run('u1', 'p1', 'a', 'anthropic', 'haiku', 100, 50, 0.001, '2026-04-16T10:00:00Z');
+    insert.run('u2', 'p1', 'b', 'openai', 'gpt-4o', 100, 50, 0.002, '2026-04-16T11:00:00Z');
+
+    const routes = createApiRoutes({ db });
+    const costs = findRoute(routes, 'GET', '/api/costs');
+    const byAgent = await call(costs, { query: { agentId: 'a' } });
+    expect((byAgent.body as { rows: unknown[] }).rows).toHaveLength(1);
+    const byProv = await call(costs, { query: { provider: 'openai' } });
+    expect((byProv.body as { rows: Array<{ id: string }> }).rows[0]?.id).toBe('u2');
+  });
+
   it('requireBearer=true enforces auth on every route', async () => {
     const routes = createApiRoutes({ db, requireBearer: 's3cret' });
     const stats = findRoute(routes, 'GET', '/api/memory/stats');

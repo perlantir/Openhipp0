@@ -26,7 +26,7 @@ import {
   type DecisionStatus,
 } from '../decisions/index.js';
 import { searchSessions, escapeFts5 } from '../recall/index.js';
-import { skills as skillsTable, auditLog as auditLogTable } from '../db/schema.js';
+import { skills as skillsTable, auditLog as auditLogTable, llmUsage as llmUsageTable } from '../db/schema.js';
 
 // ─── route shape (structural; matches @openhipp0/bridge.Route) ───────────
 
@@ -214,6 +214,68 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
           .limit(limit);
         const rows = await (where ? query.where(where) : query);
         return { body: { events: rows } };
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/costs',
+      async handler(ctx) {
+        const projectId = ctx.query['projectId'];
+        const agentId = ctx.query['agentId'];
+        const provider = ctx.query['provider'];
+        const limit = clampLimit(ctx.query['limit'], 200, 1000);
+        const conditions = [];
+        if (projectId) conditions.push(eq(llmUsageTable.projectId, projectId));
+        if (agentId) conditions.push(eq(llmUsageTable.agentId, agentId));
+        if (provider) conditions.push(eq(llmUsageTable.provider, provider));
+        const where = conditions.length > 0
+          ? (conditions.length === 1 ? conditions[0] : and(...conditions))
+          : undefined;
+        const rowsQuery = opts.db
+          .select({
+            id: llmUsageTable.id,
+            projectId: llmUsageTable.projectId,
+            agentId: llmUsageTable.agentId,
+            provider: llmUsageTable.provider,
+            model: llmUsageTable.model,
+            inputTokens: llmUsageTable.inputTokens,
+            outputTokens: llmUsageTable.outputTokens,
+            costUsd: llmUsageTable.costUsd,
+            createdAt: llmUsageTable.createdAt,
+          })
+          .from(llmUsageTable)
+          .orderBy(desc(llmUsageTable.createdAt))
+          .limit(limit);
+        const rows = await (where ? rowsQuery.where(where) : rowsQuery);
+
+        // Aggregate totals + per-provider + per-model breakdown.
+        let totalCostUsd = 0;
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        const byProvider = new Map<string, { costUsd: number; calls: number }>();
+        const byModel = new Map<string, { costUsd: number; calls: number }>();
+        for (const r of rows) {
+          totalCostUsd += r.costUsd ?? 0;
+          totalInputTokens += r.inputTokens ?? 0;
+          totalOutputTokens += r.outputTokens ?? 0;
+          const p = byProvider.get(r.provider) ?? { costUsd: 0, calls: 0 };
+          p.costUsd += r.costUsd ?? 0;
+          p.calls += 1;
+          byProvider.set(r.provider, p);
+          const mk = `${r.provider}:${r.model}`;
+          const m = byModel.get(mk) ?? { costUsd: 0, calls: 0 };
+          m.costUsd += r.costUsd ?? 0;
+          m.calls += 1;
+          byModel.set(mk, m);
+        }
+        return {
+          body: {
+            rows,
+            totals: { costUsd: totalCostUsd, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, calls: rows.length },
+            byProvider: [...byProvider.entries()].map(([name, v]) => ({ name, ...v })),
+            byModel: [...byModel.entries()].map(([name, v]) => ({ name, ...v })),
+          },
+        };
       },
     },
     {

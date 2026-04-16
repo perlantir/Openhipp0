@@ -92,6 +92,7 @@ export class LLMClient {
   private readonly budget: BudgetEnforcer | undefined;
   private readonly retryConfig: NonNullable<LLMClientConfig['retry']>;
   private readonly hooks: LLMClientHooks;
+  private readonly cache: LLMClientConfig['cache'] | undefined;
 
   constructor(
     config: LLMClientConfig,
@@ -112,10 +113,15 @@ export class LLMClient {
       : undefined;
     this.retryConfig = config.retry ?? { maxAttempts: 3, baseDelayMs: 500 };
     this.hooks = hooks;
+    this.cache = config.cache ?? undefined;
   }
 
   /** Non-streaming call. Tries providers in order until one succeeds. */
   async chatSync(messages: Message[], options: LLMOptions = {}): Promise<LLMResponse> {
+    if (this.cache) {
+      const cached = this.cache.get(messages, options);
+      if (cached) return cached;
+    }
     this.preflightBudget();
     const errors: { provider: string; error: unknown }[] = [];
 
@@ -131,6 +137,7 @@ export class LLMClient {
         const resp = await retry(() => slot.provider.chatSync(messages, options), this.retryConfig);
         slot.breaker.recordSuccess();
         await this.recordUsage(slot.config, resp);
+        this.cache?.set(messages, options, resp);
         return resp;
       } catch (err) {
         slot.breaker.recordFailure();
