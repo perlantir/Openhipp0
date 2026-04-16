@@ -62,7 +62,15 @@ export {
   type HaTransport,
   type HaConversationEvent,
 } from './home-assistant.js';
-export { Hipp0HttpServer, type Hipp0HttpServerConfig } from './http-server.js';
+export {
+  Hipp0HttpServer,
+  HttpError,
+  type Hipp0HttpServerConfig,
+  type Route,
+  type RouteHandler,
+  type RouteHandlerContext,
+  type RouteResponse,
+} from './http-server.js';
 export {
   withMediaEnrichment,
   addTtsAttachment,

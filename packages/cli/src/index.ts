@@ -185,15 +185,29 @@ export function createProgram(): Command {
     .description('start the production HTTP server (health + API surface) on port 3100')
     .option('-p, --port <port>', 'listen port (default 3100)', (v) => parseInt(v, 10))
     .option('-h, --host <host>', 'bind host (default 0.0.0.0)')
-    .action(async (opts: { port?: number; host?: string }) => {
-      const global = program.opts<CliOptions>();
-      const serveOpts: Parameters<typeof runServe>[0] = {};
-      if (opts.port !== undefined) serveOpts.port = opts.port;
-      if (opts.host !== undefined) serveOpts.host = opts.host;
-      const result = await runServe(serveOpts);
-      emit(result, global);
-      process.exit(result.exitCode);
-    });
+    .option('--with-ws', 'attach a WebBridge on /ws (same as HIPP0_WITH_WS=1)', false)
+    .option('--with-api', 'mount the REST API under /api (same as HIPP0_WITH_API=1)', false)
+    .option('--api-token <token>', 'bearer token required on every /api/* route')
+    .action(
+      async (opts: {
+        port?: number;
+        host?: string;
+        withWs?: boolean;
+        withApi?: boolean;
+        apiToken?: string;
+      }) => {
+        const global = program.opts<CliOptions>();
+        const serveOpts: Parameters<typeof runServe>[0] = {};
+        if (opts.port !== undefined) serveOpts.port = opts.port;
+        if (opts.host !== undefined) serveOpts.host = opts.host;
+        if (opts.withWs) serveOpts.withWs = true;
+        if (opts.withApi) serveOpts.withApi = true;
+        if (opts.apiToken) serveOpts.apiToken = opts.apiToken;
+        const result = await runServe(serveOpts);
+        emit(result, global);
+        process.exit(result.exitCode);
+      },
+    );
 
   program
     .command('stop')

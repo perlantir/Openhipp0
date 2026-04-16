@@ -34,6 +34,11 @@ export * as adapter from './adapter/index.js';
 /** External-platform connectors (Notion / Linear / Slack / GitHub-PR / Confluence) — Phase 16. */
 export * as connectors from './connectors/index.js';
 
+/** REST API route factory for Hipp0HttpServer.routeTable (Phase 19 cleanup). */
+export * as api from './api/index.js';
+export { createApiRoutes } from './api/index.js';
+export type { ApiRoute, ApiRouteContext, ApiRouteResponse, ApiRouteOptions } from './api/index.js';
+
 // Top-level re-exports of connector helpers for ergonomic consumer imports.
 export {
   createMemoryDedupStore,

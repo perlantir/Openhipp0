@@ -1,13 +1,22 @@
 /**
  * `hipp0 serve` — start the production HTTP server on :3100.
  *
- * This is the minimal entrypoint Docker / systemd / Railway invoke. It
- * exposes GET /health so deployment platforms can health-check the process;
- * the full REST + WebSocket surface is layered on top when the host wires
- * bridges in (Phase 9+ handle the full integrated serve path).
+ * Exposes GET /health by default. Optional opt-ins:
+ *   HIPP0_WITH_WS=1   attach a WebBridge on /ws for chat ingestion
+ *   HIPP0_WITH_API=1  mount the REST API (/api/decisions, /api/memory/*)
+ *                     — the Python SDK contract lives in docs/api-reference.md
+ *
+ * All optional subsystems are wired here rather than buried in the server
+ * so ops can flip them on from env without editing code.
  */
 
-import { Hipp0HttpServer, WebBridge, type IncomingMessage, type OutgoingMessage } from '@openhipp0/bridge';
+import {
+  Hipp0HttpServer,
+  WebBridge,
+  type IncomingMessage,
+  type OutgoingMessage,
+  type Route,
+} from '@openhipp0/bridge';
 import type { CommandResult } from '../types.js';
 
 export interface ServeOptions {
@@ -15,29 +24,54 @@ export interface ServeOptions {
   host?: string;
   /** When true, start() returns immediately after binding (tests). */
   once?: boolean;
-  /** Attach a WebBridge on /ws. Defaults to HIPP0_WITH_WS env var (1/true). */
+  /** Attach a WebBridge on /ws. Defaults to HIPP0_WITH_WS env var. */
   withWs?: boolean;
+  /** Mount /api/* routes. Defaults to HIPP0_WITH_API env var. */
+  withApi?: boolean;
+  /** Database URL used when withApi=true. Default: HIPP0_DATABASE_URL or ~/.hipp0/hipp0.db. */
+  databaseUrl?: string;
+  /** Bearer token required for API access. Default: HIPP0_API_TOKEN env. */
+  apiToken?: string;
   /** Handler for inbound chat frames; defaults to an echo responder. */
   onMessage?: (msg: IncomingMessage) => Promise<OutgoingMessage | undefined> | OutgoingMessage | undefined;
+  /** Pre-built routeTable for tests / advanced wiring. */
+  routeTable?: readonly Route[];
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> {
   const port = opts.port ?? Number(process.env['HIPP0_PORT'] ?? 3100);
   const host = opts.host ?? process.env['HIPP0_HOST'] ?? '0.0.0.0';
+  const enableApi = opts.withApi ?? envFlag(process.env['HIPP0_WITH_API']);
+
+  let routeTable: readonly Route[] = opts.routeTable ?? [];
+  let closeDb: (() => void) | undefined;
+  if (enableApi && !opts.routeTable) {
+    const built = await buildApiRoutes({
+      databaseUrl: opts.databaseUrl ?? process.env['HIPP0_DATABASE_URL'],
+      apiToken: opts.apiToken ?? process.env['HIPP0_API_TOKEN'],
+    });
+    routeTable = built.routes;
+    closeDb = built.close;
+  }
 
   const server = new Hipp0HttpServer({
     port,
     host,
+    routeTable,
     healthProbe: () => ({
       status: 'ok',
       checks: [],
       uptime: process.uptime(),
       version: process.env['npm_package_version'] ?? '0.0.0',
+      features: {
+        api: enableApi,
+        ws: opts.withWs ?? envFlag(process.env['HIPP0_WITH_WS']),
+      },
     }),
   });
 
   const addr = await server.start();
-  const banner = `🦛 hipp0 listening on http://${addr.host}:${addr.port}`;
+  const banner = `🦛 hipp0 listening on http://${addr.host}:${addr.port}${enableApi ? ' (+api)' : ''}`;
 
   const enableWs = opts.withWs ?? envFlag(process.env['HIPP0_WITH_WS']);
   let webBridge: WebBridge | undefined;
@@ -57,6 +91,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
   if (opts.once) {
     if (webBridge) await webBridge.disconnect();
     await server.stop();
+    closeDb?.();
     return { exitCode: 0, stdout: [banner, 'stopped (--once)'], data: addr };
   }
 
@@ -64,12 +99,36 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
   await new Promise<void>((resolve) => {
     const shutdown = (): void => {
       const stopper = webBridge ? webBridge.disconnect().catch(() => undefined) : Promise.resolve();
-      stopper.then(() => server.stop()).finally(resolve);
+      stopper
+        .then(() => server.stop())
+        .then(() => closeDb?.())
+        .finally(resolve);
     };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
   });
   return { exitCode: 0, stdout: [banner, 'stopped'] };
+}
+
+async function buildApiRoutes(opts: {
+  databaseUrl: string | undefined;
+  apiToken: string | undefined;
+}): Promise<{ routes: Route[]; close: () => void }> {
+  const memory = await import('@openhipp0/memory');
+  const client = memory.db.createClient(
+    opts.databaseUrl ? { databaseUrl: opts.databaseUrl } : undefined,
+  );
+  await memory.db.runMigrations(client);
+  const routes = memory.createApiRoutes({
+    db: client,
+    ...(opts.apiToken && { requireBearer: opts.apiToken }),
+  });
+  // The memory route shape is structurally compatible with bridge's Route —
+  // both use { method, path, handler({params, query, body}) -> { status?, body? } }.
+  return {
+    routes: routes as unknown as Route[],
+    close: () => memory.db.closeClient(client),
+  };
 }
 
 function envFlag(value: string | undefined): boolean {

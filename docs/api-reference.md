@@ -1,8 +1,8 @@
 # API Reference
 
-The production HTTP server exposes the endpoints below. Only `/health` is
-implemented in Phase 8; the rest are contract stubs the Python SDK targets
-(implementation lands alongside Phase 9+).
+The production HTTP server exposes the endpoints below. `/health` ships by
+default; the REST API under `/api/*` is an opt-in. Start the server with
+`hipp0 serve --with-api` (or `HIPP0_WITH_API=1`) to mount it.
 
 ## `GET /health`
 
@@ -26,21 +26,34 @@ Railway, Kubernetes liveness probes.
 
 Callers can register extra routes via `new Hipp0HttpServer({ routes: { 'GET /version': ... } })`.
 
-## Reserved endpoints (contract — not yet implemented)
+## REST API (opt-in via `--with-api` / `HIPP0_WITH_API=1`)
 
-These are targeted by `@openhipp0/openhipp0-sdk` (Python):
+| Method | Path                         | Status | Body / Query |
+|--------|------------------------------|--------|--------------|
+| POST   | `/api/decisions`             | 201    | `{ projectId, title, reasoning, madeBy, confidence, affects?, tags? }` |
+| GET    | `/api/decisions`             | 200    | `?projectId=… &status=active|superseded|rejected &limit=50 &offset=0` |
+| GET    | `/api/decisions/:id`         | 200/404| — |
+| PATCH  | `/api/decisions/:id`         | 200/404| `{ title?, reasoning?, confidence?, tags?, status? }` |
+| GET    | `/api/memory/search`         | 200/400| `?projectId=… &q=… &agentId? &userId? &limit=10` |
+| GET    | `/api/memory/stats`          | 200    | — |
 
-| Method | Path                         | Purpose                                  |
-| ------ | ---------------------------- | ---------------------------------------- |
-| POST   | `/api/decisions`             | Create a decision                        |
-| GET    | `/api/decisions`             | List decisions (`projectId`, `status`, `limit`) |
-| GET    | `/api/decisions/:id`         | Fetch one decision                       |
-| PATCH  | `/api/decisions/:id`         | Update title/reasoning/confidence/tags   |
-| GET    | `/api/memory/search`         | FTS5 search over session history         |
-| GET    | `/api/memory/stats`          | Row counts per table                     |
+### Auth
 
-These arrive in a follow-up phase. Until then, use `@openhipp0/mcp` or call
-the memory functions directly from a Node process.
+Pass `--api-token <secret>` (or set `HIPP0_API_TOKEN`) to enforce a bearer
+check on every `/api/*` route. Callers send `Authorization: Bearer <secret>`;
+responses are `401 Unauthorized` otherwise. When no token is configured, the
+routes are open — only do this inside a trusted network.
+
+### Response format
+
+Every endpoint returns JSON. Successful responses are the resource itself
+(or an array for list endpoints). Errors have the shape
+`{ "error": "…", "id"? }` with the appropriate HTTP status.
+
+### Python SDK
+
+`@openhipp0/openhipp0-sdk` targets this surface directly. See
+[`python-sdk/openhipp0-sdk/README.md`](../python-sdk/openhipp0-sdk/README.md).
 
 ## MCP (Model Context Protocol)
 

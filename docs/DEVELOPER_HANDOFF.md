@@ -200,6 +200,9 @@ HIPP0_HOME             Base config dir (default: ~/.hipp0)
 HIPP0_PORT             HTTP port for hipp0 serve (default: 3100)
 HIPP0_HOST             HTTP bind host (default: 0.0.0.0)
 HIPP0_WITH_WS          When set (1/true/yes/on), hipp0 serve attaches a WebBridge on /ws
+HIPP0_WITH_API         When set, hipp0 serve mounts the REST API under /api/*
+HIPP0_API_TOKEN        Bearer token required on every /api/* request (optional)
+HIPP0_DATABASE_URL     file:/path.db or sqlite: prefix — where the REST API stores data
 HIPP0_DEFAULT_MODEL    Seed default LLM model for init wizard
 HIPP0_VERSION          Pin CLI version in install.sh
 HIPP0_SERVE_URL        Dashboard dev-mode /ws + /health proxy target
@@ -235,15 +238,16 @@ new features that depend on them.
 
 ### 🟡 Medium priority
 
-1. **Dashboard pages 3–10 are shells** (Agents, Memory, Skills, Scheduler,
-   Health, Costs, Audit, Settings). Home + Chat are interactive; the rest
-   print "connect via CLI" messages. Wiring them up needs the REST API
-   surface (see 2 below).
-2. **REST API surface is GET /health only.** The Python SDK targets a
-   richer shape (`/api/decisions`, `/api/memory/…`) that hasn't been
-   implemented. Scope is intentionally deferred — auth model +
-   pagination + webhooks are big design decisions. See the decision-log
-   entry under Phase 8.
+1. **Dashboard pages 3–10 are shells.** As of the post-Phase-18 cleanup,
+   Home + Chat + **Memory** are now interactive (Memory talks to
+   `/api/memory/stats`). Agents / Skills / Scheduler / Health / Costs /
+   Audit / Settings still print CLI-hint placeholders — now that the REST
+   API surface exists, wiring each one is a ~100-line change per page.
+2. ~~**REST API surface is GET /health only.**~~ **RESOLVED.**
+   `hipp0 serve --with-api` mounts `/api/decisions` (POST/GET/GET-by-id/
+   PATCH), `/api/memory/search`, `/api/memory/stats`. Optional bearer
+   auth via `--api-token` / `HIPP0_API_TOKEN`. Python SDK contract is
+   live. See `docs/api-reference.md`.
 3. **Echo responder on `/ws` is a placeholder.** Wiring a real
    AgentRuntime-backed Gateway (so the dashboard chat actually runs the
    agent) is the next natural step. `hipp0 serve --with-ws` makes the
