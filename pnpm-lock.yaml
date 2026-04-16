@@ -194,6 +194,18 @@ importers:
         specifier: ^11.10.0
         version: 11.10.0
 
+  packages/eval:
+    dependencies:
+      '@openhipp0/core':
+        specifier: workspace:*
+        version: link:../core
+      '@openhipp0/memory':
+        specifier: workspace:*
+        version: link:../memory
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   packages/mcp:
     dependencies:
       '@modelcontextprotocol/sdk':

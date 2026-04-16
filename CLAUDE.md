@@ -858,6 +858,54 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 20 — Evaluation framework (`@openhipp0/eval`)
+
+**DECISION:** New package `@openhipp0/eval`, not a subdir of `core` or `e2e`
+
+- REASONING: Eval is cross-cutting (touches core + memory + bridge + scheduler) like `e2e`, and benefits from the same sibling-workspace shape. Placing it under `core` would pull benchmark-specific types into the foundational package; under `e2e` it would mix "deterministic CI checks" with "benchmark scoring" semantics.
+- AFFECTS: `packages/eval/`.
+- CONFIDENCE: high.
+
+**DECISION:** `EvalCase` owns `setup` / `run` / `verify` / `teardown`; runner stays runtime-agnostic
+
+- REASONING: Published benchmarks (τ-bench, SWE-bench, AgentBench, GAIA) each need different setup: a scripted user, a patched file, an OS shell, a factual question. Forcing one runtime into the case would either over-couple the runner to AgentRuntime or hide the specifics each adapter needs. Cases carry their own runtime construction; the runner supplies metrics capture + threshold enforcement.
+- ALTERNATIVES_REJECTED: "All cases go through AgentRuntime" — doesn't fit pure memory-recall checks; "all cases are pure functions" — doesn't fit τ-bench's multi-turn conversation shape.
+- AFFECTS: `src/types.ts`, `src/runner.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Tiered suites are case-level tags (`tiers: readonly EvalTier[]`), not separate lists
+
+- REASONING: A memory-recall case belongs in smoke + regression + full; a GAIA Level-3 case belongs only in full. Tagging at the case level makes tier membership explicit in one place and avoids duplicating the same case across three suite exports.
+- AFFECTS: `src/types.ts` EvalCase.tiers.
+- CONFIDENCE: high.
+
+**DECISION:** Regression thresholds live in `src/thresholds.ts`, not `~/.hipp0/eval.json`
+
+- REASONING: A file in shared state means PR-A can lower the floor and PR-B inherits it without review. In-source thresholds force every PR that changes behavior to also edit the committed floor, with the PR description explaining the delta.
+- AFFECTS: `src/thresholds.ts`, CI gate semantics.
+- CONFIDENCE: high.
+
+**DECISION:** Cost / tool-call / safety signals flow via a runner-injected `RunCaptures` helper on `ctx.__captures`
+
+- REASONING: Cases shouldn't have to wrap their own result envelope with metrics; the runner already owns the collector. Attaching captures on the ctx (non-enumerable so debug stringifies stay clean) lets each case pull them with `getCaptures(ctx)` and report as it goes.
+- ALTERNATIVES_REJECTED: Return-value metadata — forces every adapter to build a result envelope; easy to forget to include counters. Global singletons — break parallelism + test isolation.
+- AFFECTS: `src/runner.ts`, every adapter's `run(ctx)`.
+- CONFIDENCE: medium.
+
+**DECISION:** Ship small built-in datasets per benchmark; full datasets are loaded via `taskToCase(task)`
+
+- REASONING: Shipping full τ-bench / SWE-bench / AgentBench / GAIA corpora would add hundreds of MB + churn the repo. Built-in tasks exercise the shape in CI. Ops teams point `taskToCase` at local clones for the weekly full suite.
+- AFFECTS: `src/benchmarks/*.ts`. Documented in the suite runner.
+- CONFIDENCE: high.
+
+**DECISION:** Publish-vs-OpenClaw comparisons + A/B infra + public leaderboard explicitly **cut** from v1
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. Comparisons are legally risky; A/B belongs to Phase 22; leaderboard is post-launch operational work.
+- AFFECTS: Documentation, not code.
+- CONFIDENCE: high.
+
+---
+
 ## Open Questions / TODOs
 
 - [ ] Add `eslint-plugin-boundaries` (or equivalent) to enforce the import matrix, if drift happens.
