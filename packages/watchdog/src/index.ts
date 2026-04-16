@@ -26,3 +26,4 @@ export { Watchdog } from './watchdog.js';
 export type { SnapshotProvider, WatchdogDeps } from './watchdog.js';
 
 export * from './health/index.js';
+export * from './update/index.js';
