@@ -591,6 +591,76 @@ CONFIDENCE: high | medium | low
 - AFFECTS: No file added. Documented here so the next contributor doesn't reach for one.
 - CONFIDENCE: medium.
 
+### Phase 5.1 — Skills engine
+
+**DECISION:** Skill manifest is validated against `SkillManifestSchema` (Zod) at load time, not at registration
+
+- REASONING: Load is the I/O boundary; by the time a skill reaches the registry it's already been validated. Separating the two keeps `SkillRegistry` pure (no async, no fs).
+- AFFECTS: `packages/core/src/skills/loader.ts`, `registry.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Loader skips `_`-prefixed and `.`-prefixed directories
+
+- REASONING: `_template/` is the spec's built-in template dir; it shouldn't be loaded as a skill. Dot-prefixed dirs are hidden/temp by convention.
+- CONFIDENCE: high.
+
+**DECISION:** Skill name is a lowercase-slug (`/^[a-z0-9_-]+$/`), enforced by Zod
+
+- REASONING: Names are used as filesystem directory names, registry keys, and command-line arguments — all of which break on spaces/special chars.
+- CONFIDENCE: high.
+
+### Phase 5.2 + 5.3 — Policy engine + execution governance
+
+**DECISION:** `enforce()` checks permission → path → domain → approval, in that order, short-circuiting
+
+- REASONING: Each check is independent and progressively more expensive. Permission is cheapest (set lookup); path requires glob matching; domain is a string match; approval is an async wait. Short-circuiting means a missing permission never reaches the approval step.
+- AFFECTS: `packages/core/src/security/policy.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Minimal glob matcher (`**` and `*`), no external `minimatch` dependency
+
+- REASONING: Core must stay dependency-light; the glob patterns we use (`~/.ssh/**`, `./**`) are simple enough for a 10-line regex converter.
+- AFFECTS: `policy.ts`. If exotic patterns appear in Phase 7+ configs, swap in a library then.
+- CONFIDENCE: medium.
+
+**DECISION:** GovernanceEngine resolves approval promises even on 'denied' (caller checks `decision`)
+
+- REASONING: Earlier draft rejected denied as an error; that forced callers to catch/distinguish deny from timeout. Resolving with the decision object is cleaner — callers destructure `decision` and take the appropriate code path without error handling.
+- AFFECTS: `governance.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** `ALWAYS_BLOCKED_PATHS` (ssh/aws/gnupg/hipp0-secrets) cannot be overridden by any policy template
+
+- REASONING: Security-critical. Even `permissive` mode doesn't grant access to SSH keys. The list is hardcoded in `templates.ts` and checked independently of the policy's `allowedPaths`.
+- AFFECTS: `policy.ts`, `templates.ts`.
+- CONFIDENCE: high.
+
+### Phase 6.1 — Heartbeat scheduler
+
+**DECISION:** Minimal 5-field cron parser in-tree, no `cron-parser` dependency
+
+- REASONING: The scheduler package is small; pulling in `cron-parser` adds a transitive dependency tree. Our parser handles `*`, ranges, steps, commas — sufficient for the heartbeat use case.
+- AFFECTS: `packages/scheduler/src/cron.ts`.
+- CONFIDENCE: medium. Swap if edge cases surface.
+
+**DECISION:** `nextFireTime` brute-force scans minute-by-minute, capped at 2 years
+
+- REASONING: Tasks fire at most once per minute. A 2-year scan is ~1M iterations — completes in <5ms on modern hardware. Algebraic solvers for the general 5-field case are surprisingly tricky to get right.
+- CONFIDENCE: high.
+
+**DECISION:** `enabled` field on CronTaskConfig defaults to `true` via Zod, but engine checks `=== false` defensively
+
+- REASONING: `addTask` receives the config as a TS type (not parsed through Zod), so the `.default(true)` doesn't apply to callers passing plain objects. Checking `=== false` instead of `!enabled` avoids the `undefined → disabled` trap.
+- CONFIDENCE: high.
+
+### Phase 6.2 — Multi-agent orchestrator
+
+**DECISION:** Routing is pure overlap-count + successRate tiebreaker; no LLM-based classification
+
+- REASONING: Phase 6 scope is library foundations. LLM-classified routing can be layered on top via a classifier that emits `TaskDescriptor.domains` before calling `router.route()`. The router itself stays fast and deterministic.
+- AFFECTS: `packages/core/src/orchestrator/router.ts`.
+- CONFIDENCE: medium. LLM routing is a Phase 8 concern.
+
 ---
 
 ## Coding Standards
