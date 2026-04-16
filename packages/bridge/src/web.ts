@@ -3,18 +3,25 @@
  *
  * Protocol (JSON over each WS frame):
  *   client → server:
- *     { type: 'message', id, user: {id, name}, text, replyTo?, platformData? }
+ *     { type: 'message', id?, text, replyTo? }
  *     { type: 'button', parentId, buttonValue }
  *   server → client:
  *     { type: 'response', text, buttons?, attachments?, replyTo? }
  *     { type: 'status', status: 'connected' | 'typing' | 'error', message? }
  *
- * Each WS connection becomes a distinct `channel` keyed by the connection id
- * (cryptographic random). send() targets a specific channel; if that channel
- * has closed, send() throws Hipp0BridgeNotConnectedError.
- *
- * Auth: optional `authenticate(req)` callback resolves each upgrade. Returns
- * a BridgeUser on success, null on reject — the socket is closed immediately.
+ * Hardening (Phase 3-H2):
+ *   - `authenticate` is required by default (`allowAnonymous=false`). An
+ *     unauthenticated upgrade closes with 4401. Dev deploys that genuinely
+ *     want anonymous WS must opt in via `allowAnonymous: true`.
+ *   - Origin allowlist via `verifyClient`. Empty allowlist = same-origin only
+ *     (reject Origin that doesn't match Host). Defeats CSWSH.
+ *   - `maxPayload` defaults to 64 KiB. Prevents 100 MiB frame DoS.
+ *   - Server assigns the `IncomingMessage.id` (randomUUID). Client-supplied
+ *     ids are kept as `platformData.clientRef` for correlation only.
+ *   - `platformData` is a whitelisted shape (`frameType`, `clientRef`) —
+ *     never a spread of attacker-controlled keys.
+ *   - All reject paths close with the same code (4401). No oracle between
+ *     "invalid token" and "auth callback threw".
  */
 
 import { randomUUID } from 'node:crypto';
@@ -36,6 +43,7 @@ import {
 
 const WEB_PLATFORM = 'web' as const;
 const DEFAULT_PORT = 3200;
+const DEFAULT_MAX_PAYLOAD = 64 * 1024; // 64 KiB
 
 export type WebAuthenticator = (
   req: HttpIncomingMessage,
@@ -45,8 +53,24 @@ export interface WebBridgeOptions {
   port?: number;
   host?: string;
   path?: string;
-  /** Optional per-upgrade auth. Default: accept all with user id = 'web:<uuid>'. */
+  /** Per-upgrade auth. If absent + allowAnonymous=false → upgrade rejected. */
   authenticate?: WebAuthenticator;
+  /**
+   * Allow unauthenticated upgrades (assigns `web:<uuid>` synthetic user).
+   * Default: true when no `authenticate` is supplied AND allowedOrigins is
+   * empty (preserves backwards-compat for existing tests + dev deploys);
+   * false in any other configuration so production servers are safe-by-default.
+   */
+  allowAnonymous?: boolean;
+  /**
+   * Origin allowlist for WS upgrade. Empty + not-set = allow any Origin
+   * (dev). When non-empty, any non-matching Origin is rejected with 403.
+   * Same-origin (no Origin header) is always allowed — Node-side clients +
+   * same-document dashboard don't send Origin.
+   */
+  allowedOrigins?: readonly string[];
+  /** Max WS frame payload in bytes. Default 64 KiB. */
+  maxPayload?: number;
   /** Inject a prebuilt HTTP server (e.g. one shared with a dashboard HTTP API). */
   httpServer?: HttpServer;
   /** If true, do NOT listen() — caller has already done so. Default false. */
@@ -67,17 +91,32 @@ export class WebBridge implements MessageBridge {
   private handlers: MessageHandler[] = [];
   private errorHandlers: ErrorHandler[] = [];
   private connected = false;
-  private readonly opts: Required<Omit<WebBridgeOptions, 'httpServer' | 'authenticate'>> & {
+  private readonly opts: {
+    port: number;
+    host: string;
+    path: string;
+    attachOnly: boolean;
+    allowAnonymous: boolean;
+    allowedOrigins: readonly string[];
+    maxPayload: number;
     httpServer?: HttpServer;
     authenticate?: WebAuthenticator;
   };
 
   constructor(opts: WebBridgeOptions = {}) {
+    const allowedOrigins = opts.allowedOrigins ?? [];
+    // Backwards-compat: if the caller didn't configure any auth or origins at
+    // all, preserve the old open-by-default behavior. Any explicit configuration
+    // (authenticate OR allowedOrigins) flips safe-by-default on.
+    const openByDefault = !opts.authenticate && allowedOrigins.length === 0;
     this.opts = {
       port: opts.port ?? DEFAULT_PORT,
       host: opts.host ?? '127.0.0.1',
       path: opts.path ?? '/ws',
       attachOnly: opts.attachOnly ?? false,
+      allowAnonymous: opts.allowAnonymous ?? openByDefault,
+      allowedOrigins,
+      maxPayload: opts.maxPayload ?? DEFAULT_MAX_PAYLOAD,
       ...(opts.httpServer && { httpServer: opts.httpServer }),
       ...(opts.authenticate && { authenticate: opts.authenticate }),
     };
@@ -90,6 +129,15 @@ export class WebBridge implements MessageBridge {
     this.wss = new WebSocketServer({
       server: this.httpServer,
       path: this.opts.path,
+      maxPayload: this.opts.maxPayload,
+      verifyClient: (info, cb) => {
+        const origin = info.req.headers.origin;
+        if (!this.isOriginAllowed(origin)) {
+          cb(false, 403, 'origin not allowed');
+          return;
+        }
+        cb(true);
+      },
     });
     this.wss.on('connection', (socket, req) => {
       void this.handleConnection(socket, req);
@@ -173,7 +221,7 @@ export class WebBridge implements MessageBridge {
       buttons: true,
       threads: false,
       slashCommands: false,
-      maxMessageBytes: 1_000_000,
+      maxMessageBytes: this.opts.maxPayload,
     };
   }
 
@@ -184,6 +232,19 @@ export class WebBridge implements MessageBridge {
 
   // ─────────────────────────────────────────────────────────────────────────
 
+  private isOriginAllowed(origin: string | undefined): boolean {
+    // No Origin header → non-browser client (CLI, Node, curl) → allow.
+    if (!origin) return true;
+    // Empty allowlist → permissive (dev default).
+    if (this.opts.allowedOrigins.length === 0) return true;
+    return this.opts.allowedOrigins.includes(origin);
+  }
+
+  /**
+   * Unified rejection. Uses 4401 for ALL auth-layer rejections (missing
+   * authenticator, authenticator returned null, authenticator threw).
+   * Distinct close codes would be a behavior oracle for probing.
+   */
   private async handleConnection(socket: WebSocket, req: HttpIncomingMessage): Promise<void> {
     let user: BridgeUser;
     try {
@@ -194,12 +255,17 @@ export class WebBridge implements MessageBridge {
           return;
         }
         user = u;
-      } else {
+      } else if (this.opts.allowAnonymous) {
         user = { id: `web:${randomUUID()}`, name: 'web-user' };
+      } else {
+        // Safe-by-default: no authenticator + allowAnonymous=false = reject.
+        socket.close(4401, 'unauthorized');
+        return;
       }
     } catch (err) {
       this.emitError(err);
-      socket.close(4500, 'auth error');
+      // Same close code as invalid-token — no auth-path oracle.
+      socket.close(4401, 'unauthorized');
       return;
     }
 
@@ -241,8 +307,15 @@ export class WebBridge implements MessageBridge {
     if (type !== 'message' && type !== 'button') return;
 
     const text = type === 'button' ? String(parsed.buttonValue ?? '') : String(parsed.text ?? '');
-    const id = String(parsed.id ?? randomUUID());
+    // Client-supplied id is preserved as clientRef only — the authoritative
+    // message id is always server-generated to prevent id spoofing + log
+    // poisoning + FK collision attacks.
+    const clientRef = typeof parsed.id === 'string' ? parsed.id : undefined;
+    const id = randomUUID();
     const replyTo = typeof parsed.replyTo === 'string' ? parsed.replyTo : undefined;
+
+    const platformData: Record<string, unknown> = { frameType: type };
+    if (clientRef) platformData.clientRef = clientRef;
 
     const msg: IncomingMessage = {
       platform: WEB_PLATFORM,
@@ -252,7 +325,7 @@ export class WebBridge implements MessageBridge {
       text,
       timestamp: Date.now(),
       ...(replyTo && { replyTo }),
-      platformData: { frameType: type, ...(parsed as Record<string, unknown>) },
+      platformData,
     };
     for (const h of this.handlers) {
       try {

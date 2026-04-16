@@ -172,10 +172,18 @@ export class Gateway {
       session.conversation.splice(0, session.conversation.length - maxBuf);
     }
 
+    // Prefer the client's reference (platformData.clientRef, set by WebBridge
+    // when the client supplied an id) so browsers can correlate responses
+    // against the id they originally sent. Falls back to the server-authored
+    // message id for platforms that don't carry a clientRef.
+    const clientRef =
+      msg.platformData && typeof (msg.platformData as Record<string, unknown>)['clientRef'] === 'string'
+        ? ((msg.platformData as Record<string, unknown>)['clientRef'] as string)
+        : undefined;
     const outgoing: OutgoingMessage = {
       text: response.text || '(no response)',
       ...(this.config.defaultButtons && { buttons: this.config.defaultButtons }),
-      replyTo: msg.id,
+      replyTo: clientRef ?? msg.id,
     };
     try {
       await bridge.send(msg.channel.id, outgoing);

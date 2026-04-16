@@ -10,6 +10,8 @@
  * so ops can flip them on from env without editing code.
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage as HttpIncomingMessage } from 'node:http';
 import {
   Hipp0HttpServer,
   WebBridge,
@@ -18,6 +20,7 @@ import {
   type OutgoingMessage,
   type Route,
   type PreRouteMiddleware,
+  type WebAuthenticator,
 } from '@openhipp0/bridge';
 import type { CommandResult } from '../types.js';
 import { buildVoiceRoutes } from './voice-routes.js';
@@ -177,7 +180,22 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
   if (enableWs) {
     const http = server.getHttpServer();
     if (http) {
-      webBridge = new WebBridge({ httpServer: http, path: '/ws', attachOnly: true });
+      // WS authenticator — bearer token on query string (?token=...) since
+      // browsers can't set Authorization headers on WS upgrades. Uses
+      // constant-time compare against the API token.
+      const apiToken = opts.apiToken ?? process.env['HIPP0_API_TOKEN'];
+      const wsAuthenticator = apiToken ? buildWsAuthenticator(apiToken) : undefined;
+      const allowAnonymousWs = !apiToken && envFlag(process.env['HIPP0_WS_ANONYMOUS']);
+      webBridge = new WebBridge({
+        httpServer: http,
+        path: '/ws',
+        attachOnly: true,
+        allowedOrigins,
+        ...(wsAuthenticator && { authenticate: wsAuthenticator }),
+        // If we have an API token the WS authenticator gates; otherwise
+        // anonymous-by-env only (defaults off for safety).
+        ...(!apiToken && { allowAnonymous: allowAnonymousWs }),
+      });
       const handler =
         opts.onMessage ??
         (await loadAgentModule(process.env['HIPP0_AGENT_MODULE'])) ??
@@ -254,17 +272,52 @@ function buildConfigRoutes(auth: AuthMiddleware): readonly Route[] {
   ];
 }
 
+/**
+ * Defensive redact for config values bound for `/api/config`. Drops
+ * well-known secret-shaped keys AND redacts any string value that LOOKS
+ * like a credential (sk-ant-, ghp_, hipp0_ak_, JWT-like, long b64). Recurses
+ * into arrays (the previous implementation did not).
+ */
 function sanitizeConfig(cfg: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(cfg)) {
-    if (/key|secret|token|password/i.test(k)) continue;
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      out[k] = sanitizeConfig(v as Record<string, unknown>);
-    } else {
-      out[k] = v;
+  return sanitizeValue(cfg) as Record<string, unknown>;
+}
+
+const SENSITIVE_KEY = /key|secret|token|password|credential|auth|webhook|dsn|privatekey|client[_-]?id|connection/i;
+const SECRET_SHAPED = /(sk-ant-api0[0-9]-[A-Za-z0-9_-]{32,}|sk-proj-[A-Za-z0-9_-]{32,}|ghp_[A-Za-z0-9]{20,}|hipp0_ak_[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/;
+
+function sanitizeValue(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sanitizeValue);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (SENSITIVE_KEY.test(k)) continue;
+      out[k] = sanitizeValue(val);
     }
+    return out;
   }
-  return out;
+  if (typeof v === 'string' && SECRET_SHAPED.test(v)) return '<redacted>';
+  return v;
+}
+
+/**
+ * Build a WebSocket authenticator that accepts `?token=<bearer>` on the
+ * upgrade URL (browsers can't set Authorization on WS). Uses SHA-256 +
+ * `timingSafeEqual` so token comparison is constant-time.
+ */
+function buildWsAuthenticator(token: string): WebAuthenticator {
+  const expectedHash = Buffer.from(createHash('sha256').update(token).digest('hex'), 'hex');
+  return (req: HttpIncomingMessage) => {
+    const url = req.url ?? '';
+    const qIdx = url.indexOf('?');
+    if (qIdx < 0) return null;
+    const params = new URLSearchParams(url.slice(qIdx + 1));
+    const presented = params.get('token') ?? params.get('t');
+    if (!presented) return null;
+    const presentedHash = Buffer.from(createHash('sha256').update(presented).digest('hex'), 'hex');
+    if (presentedHash.length !== expectedHash.length) return null;
+    if (!timingSafeEqual(presentedHash, expectedHash)) return null;
+    return { id: `web:auth:${presented.slice(0, 6)}`, name: 'authenticated-web' };
+  };
 }
 
 async function buildApiRoutes(opts: {
