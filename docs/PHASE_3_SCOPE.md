@@ -92,11 +92,22 @@ All four of these close real gaps that shipped in earlier phases.
 - E2E test for pair → biometric → REST call → RLS filter → response. Single
   biggest coverage gap in the current test suite.
 
-### Retro-D — Split `phase17.ts`
+### Retro-D — Split `phase17.ts` — **deferred (opportunistic)**
 
-15 integrations in one 1,300-line file. Split into
-`integrations/{outlook,apple-calendar,google-calendar,...}/tools.ts` to
-match the brave/github/gmail/linear pattern. Mechanical; no test deltas.
+14 integrations in one 627-line file (todoist already landed in its own
+dir). Splitting matches the brave/github/gmail/linear pattern but is
+pure mechanical reorganization — zero correctness or security payoff
+against a ~15-new-file cost plus regression risk across the 44 existing
+integration tests.
+
+**Decision:** leave `phase17.ts` in place as the source of truth.
+Opportunistic split: each time we *next touch* one of its 14
+integrations (skill update, OAuth plumbing change, bug fix), move that
+integration out to its own subdir in the same PR. Within 3–6 months
+this should drain `phase17.ts` organically with zero dedicated effort.
+
+When the count drops below 4 integrations, delete `phase17.ts` entirely
+and finish the migration in one small PR.
 
 ### Retro-E — Python SDK expansion
 
