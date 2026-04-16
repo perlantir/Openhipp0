@@ -18,3 +18,9 @@ export { TelegramBridge, type TelegramBridgeOptions } from './telegram.js';
 export { SlackBridge, type SlackBridgeOptions } from './slack.js';
 export { Gateway, type GatewayAgent, type GatewayConfig, type ExchangeEvent } from './gateway.js';
 export { Hipp0HttpServer, type Hipp0HttpServerConfig } from './http-server.js';
+export {
+  withMediaEnrichment,
+  addTtsAttachment,
+  type MediaEnrichmentOptions,
+  type AttachmentFetcher,
+} from './media.js';

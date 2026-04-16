@@ -4,13 +4,18 @@
   "private": true,
   "description": "Model Context Protocol server exposing Open Hipp0 tools + memory to MCP clients (Claude Desktop, Cursor, Windsurf, Claude Code).",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "hipp0-mcp": "./bin/hipp0-mcp.js"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",

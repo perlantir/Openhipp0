@@ -11,7 +11,13 @@
  * for HTTP mode).
  */
 
-import { App, type SlackEventMiddlewareArgs, type SlackAction } from '@slack/bolt';
+import bolt from '@slack/bolt';
+import type { App as AppType, SlackEventMiddlewareArgs, SlackAction } from '@slack/bolt';
+// @slack/bolt is CJS; native Node ESM requires default-import + runtime
+// destructure (named imports only work through bundlers/esbuild/tsx).
+// `import type` is erased at compile time, so it works regardless.
+const { App } = bolt as { App: typeof AppType };
+type App = AppType;
 import {
   Hipp0BridgeNotConnectedError,
   Hipp0BridgeSendError,

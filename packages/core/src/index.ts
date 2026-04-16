@@ -63,6 +63,46 @@ export * as auth from './auth/index.js';
 /** Third-party integrations: brave / github / gmail / linear (Phase 10). */
 export * as integrations from './integrations/index.js';
 
+/** Voice, image generation, vision (Phase 11). */
+export * as media from './media/index.js';
+
+// Top-level re-exports — consumers in @openhipp0/bridge etc. want to use the
+// MediaEngine + stub classes without the `media.` namespace prefix.
+export {
+  MediaEngine,
+  OpenAIWhisperProvider,
+  WhisperCppProvider,
+  OpenAITtsProvider,
+  LocalTtsStub,
+  OpenAIImageProvider,
+  ClaudeVisionProvider,
+  OpenAIVisionProvider,
+  LocalVisionStub,
+  enrichMessage,
+  transcribeVoiceAttachment,
+  describeImageAttachment,
+  Hipp0MediaError,
+} from './media/index.js';
+export type {
+  MediaEngineConfig,
+  TranscriptionProvider,
+  TranscribeOptions,
+  TranscriptionInput,
+  TranscriptionResult,
+  TtsProvider,
+  TtsInput,
+  TtsResult,
+  ImageGenerationProvider,
+  ImageGenerationInput,
+  ImageGenerationResult,
+  VisionProvider,
+  VisionImage,
+  VisionDescribeInput,
+  VisionDescribeResult,
+  VoiceAttachment,
+  ImageAttachment,
+} from './media/index.js';
+
 // Runtime classes consumed by external packages (memory adapter, SDK).
 export { AgentRuntime } from './agent/index.js';
 export { LLMClient } from './llm/index.js';

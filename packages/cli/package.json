@@ -4,13 +4,18 @@
   "private": true,
   "description": "hipp0 CLI — init/start/status/doctor/skill/memory/agent/cron (Phase 7)",
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "hipp0": "./bin/hipp0.js"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",
