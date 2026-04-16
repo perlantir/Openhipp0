@@ -19,6 +19,7 @@
     "clean": "rm -rf dist .turbo coverage"
   },
   "dependencies": {
+    "@openhipp0/core": "workspace:*",
     "zod": "^3.25.76"
   }
 }

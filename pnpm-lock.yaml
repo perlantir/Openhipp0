@@ -102,6 +102,9 @@ importers:
 
   packages/watchdog:
     dependencies:
+      '@openhipp0/core':
+        specifier: workspace:*
+        version: link:../core
       zod:
         specifier: ^3.25.76
         version: 3.25.76

@@ -27,3 +27,12 @@ export type { SnapshotProvider, WatchdogDeps } from './watchdog.js';
 
 export * from './health/index.js';
 export * from './update/index.js';
+export {
+  BreakerRegistry,
+  CircuitBreaker,
+  type BreakerEntry,
+  type BreakerStateChange,
+  type CircuitBreakerConfig,
+  type CircuitState,
+} from './breakers/registry.js';
+export * from './predictor/index.js';
