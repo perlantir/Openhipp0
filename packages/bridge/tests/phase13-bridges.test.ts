@@ -5,7 +5,7 @@
  * + any bridge-specific behavior).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { SignalBridge, type SignalTransport } from '../src/signal.js';
 import { MatrixBridge, type MatrixTransport } from '../src/matrix.js';
 import { MattermostBridge, type MattermostTransport } from '../src/mattermost.js';

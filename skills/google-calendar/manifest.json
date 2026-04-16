@@ -1,0 +1,17 @@
+{
+  "name": "google-calendar",
+  "description": "List + create events on the user's Google Calendar.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(google.*calendar|gcal|meeting)\\b",
+  "tools": [
+    "google_calendar_list",
+    "google_calendar_create"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "calendar",
+    "google",
+    "integration"
+  ]
+}

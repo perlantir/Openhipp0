@@ -1,0 +1,16 @@
+{
+  "name": "notion",
+  "description": "Search pages and databases in Notion.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(notion|workspace)\\b",
+  "tools": [
+    "notion_search"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "knowledge-base",
+    "notion",
+    "integration"
+  ]
+}

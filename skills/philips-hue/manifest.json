@@ -1,0 +1,17 @@
+{
+  "name": "philips-hue",
+  "description": "List + control Philips Hue lights on the local bridge.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(hue|lights|lamp)\\b",
+  "tools": [
+    "hue_list_lights",
+    "hue_set_light"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "smart-home",
+    "hue",
+    "lights"
+  ]
+}

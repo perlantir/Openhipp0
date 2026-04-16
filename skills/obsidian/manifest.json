@@ -1,0 +1,16 @@
+{
+  "name": "obsidian",
+  "description": "Read markdown notes from a local Obsidian vault.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(obsidian|vault|note)\\b",
+  "tools": [
+    "obsidian_read_note"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "knowledge-base",
+    "obsidian",
+    "local"
+  ]
+}

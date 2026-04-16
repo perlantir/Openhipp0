@@ -1,0 +1,16 @@
+{
+  "name": "jira",
+  "description": "Search Jira Cloud issues with JQL.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(jira|ticket|issue.*\\b[A-Z]{2,}-[0-9]+)\\b",
+  "tools": [
+    "jira_search_issues"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "productivity",
+    "jira",
+    "atlassian"
+  ]
+}

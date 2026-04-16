@@ -1,0 +1,16 @@
+{
+  "name": "apple-calendar",
+  "description": "List events on an Apple / iCloud CalDAV calendar.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(apple.*calendar|icloud.*calendar|caldav)\\b",
+  "tools": [
+    "apple_calendar_list"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "calendar",
+    "apple",
+    "caldav"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "dropbox",
+  "description": "Search files in the user's Dropbox.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\bdropbox\\b",
+  "tools": [
+    "dropbox_search"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "storage",
+    "dropbox",
+    "integration"
+  ]
+}

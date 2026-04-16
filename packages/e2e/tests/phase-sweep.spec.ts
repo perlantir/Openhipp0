@@ -10,7 +10,7 @@
  * Playwright browsers installed yet for phase 9).
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
 const HIPP0_HTTP = process.env.HIPP0_HTTP ?? 'http://127.0.0.1:3150';
 const DASHBOARD = process.env.DASHBOARD ?? 'http://127.0.0.1:5173';
@@ -23,10 +23,8 @@ function record(phase: string, ok: boolean, reason?: string) {
 }
 
 test.afterAll(async () => {
-  // eslint-disable-next-line no-console
   console.log('\nPhase sweep summary:');
   for (const r of results) {
-    // eslint-disable-next-line no-console
     console.log(`  ${r.ok ? '✓' : '✗'} ${r.phase}${r.reason ? ' — ' + r.reason : ''}`);
   }
 });
@@ -73,11 +71,11 @@ test('no unexpected console errors on dashboard home', async ({ page }) => {
     if (msg.type() === 'error') errors.push(msg.text());
   });
   await page.goto(DASHBOARD, { waitUntil: 'networkidle' });
-  // Filter out benign WS connection warnings (dashboard expects /ws which the
-  // local server doesn't ship yet — documented + acceptable).
+  // Filter out benign WS connection warnings (when running without
+  // HIPP0_WITH_WS=1 set on `hipp0 serve`, the dashboard's /ws probe fails
+  // — not a correctness issue, just missing an opt-in).
   const real = errors.filter((e) => !/WebSocket|ws:\/\/|localhost.*\/ws/i.test(e));
   if (real.length > 0) {
-    // eslint-disable-next-line no-console
     console.log('dashboard console errors (non-WS):', real);
   }
   record('dashboard-console', real.length === 0, real[0]);

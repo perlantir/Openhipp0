@@ -1,0 +1,17 @@
+{
+  "name": "todoist",
+  "description": "List + create Todoist tasks.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(todo|task|todoist)\\b",
+  "tools": [
+    "todoist_list_tasks",
+    "todoist_add_task"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "productivity",
+    "tasks",
+    "todoist"
+  ]
+}

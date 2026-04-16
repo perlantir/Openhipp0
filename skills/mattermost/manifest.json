@@ -1,0 +1,16 @@
+{
+  "name": "mattermost",
+  "description": "Post messages to a Mattermost channel.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\bmattermost\\b",
+  "tools": [
+    "mattermost_post"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "messaging",
+    "mattermost",
+    "team-chat"
+  ]
+}

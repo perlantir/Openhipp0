@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import type { MigrationFs } from '../../src/commands/migrate-shared.js';
 import { parseMemoryEntries } from '../../src/commands/migrate-shared.js';

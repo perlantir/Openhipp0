@@ -1,0 +1,16 @@
+{
+  "name": "google-drive",
+  "description": "Search Google Drive (Drive v3 query syntax).",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(google.*drive|gdrive)\\b",
+  "tools": [
+    "google_drive_search"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "storage",
+    "google",
+    "integration"
+  ]
+}

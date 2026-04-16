@@ -1,0 +1,16 @@
+{
+  "name": "home-assistant",
+  "description": "Call a Home Assistant service (lights, switches, notify, tts).",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(home.*assistant|home.*automation|ha.*service|turn.*on|turn.*off)\\b",
+  "tools": [
+    "home_assistant_call_service"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "smart-home",
+    "home-assistant",
+    "iot"
+  ]
+}

@@ -4,10 +4,10 @@
  * tests stay deterministic without network access.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import {
   MediaEngine,
-  LocalTtsStub,
   LocalVisionStub,
   type TranscriptionProvider,
 } from '@openhipp0/core';
@@ -151,7 +151,7 @@ describe('connector → memory → trajectory export', () => {
 // ──────────────────────────────────────────────────────────────────────────
 
 function createMemFs(seed: Record<string, string | Uint8Array>) {
-  const { join, dirname } = require('node:path') as typeof import('node:path');
+  const { dirname } = path;
   const store = new Map<string, string | Uint8Array>(Object.entries(seed));
   const dirs = new Set<string>();
   for (const k of store.keys()) {

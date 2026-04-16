@@ -1,0 +1,16 @@
+{
+  "name": "spotify",
+  "description": "Search Spotify tracks, albums, artists, or playlists.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(spotify|play.*song|music|playlist)\\b",
+  "tools": [
+    "spotify_search"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "music",
+    "spotify",
+    "integration"
+  ]
+}

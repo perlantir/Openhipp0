@@ -1,0 +1,16 @@
+{
+  "name": "outlook",
+  "description": "Search the authenticated user's Outlook mail.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(outlook|hotmail|microsoft.*mail)\\b",
+  "tools": [
+    "outlook_search"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "email",
+    "microsoft",
+    "integration"
+  ]
+}

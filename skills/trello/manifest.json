@@ -1,0 +1,16 @@
+{
+  "name": "trello",
+  "description": "List the user's Trello boards.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\btrello\\b",
+  "tools": [
+    "trello_list_boards"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "productivity",
+    "trello",
+    "integration"
+  ]
+}

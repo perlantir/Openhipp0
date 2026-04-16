@@ -1,0 +1,16 @@
+{
+  "name": "twilio-sms",
+  "description": "Send SMS via Twilio.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(sms|text.*message|twilio)\\b",
+  "tools": [
+    "twilio_send_sms"
+  ],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": [
+    "messaging",
+    "sms",
+    "twilio"
+  ]
+}
