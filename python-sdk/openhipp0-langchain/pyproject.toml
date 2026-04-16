@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openhipp0-langchain"
+version = "0.0.0"
+description = "LangChain callback handler that forwards events into Open Hipp0's memory graph."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = ["openhipp0-sdk>=0.0.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-httpx>=0.30"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openhipp0_langchain"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
