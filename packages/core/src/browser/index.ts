@@ -28,7 +28,18 @@ export {
   heuristicPlan,
   type Planner,
 } from './planner.js';
-export { createBrowserTools } from './tools.js';
+export { createBrowserTools, type BrowserToolsOptions } from './tools.js';
+export {
+  resolveAndGuard,
+  createSystemResolver,
+  isIpPrivate,
+  isIpv4Private,
+  isIpv6Private,
+  ssrfErrorCode,
+  type DnsResolver,
+  type NavigationError,
+  type NavigationResolution,
+} from './ssrf.js';
 export type {
   ActionResult,
   AxNode,
