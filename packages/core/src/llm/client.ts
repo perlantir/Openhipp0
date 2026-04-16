@@ -88,11 +88,13 @@ interface ProviderSlot {
 }
 
 export class LLMClient {
-  private readonly slots: ProviderSlot[];
+  private slots: ProviderSlot[];
   private readonly budget: BudgetEnforcer | undefined;
   private readonly retryConfig: NonNullable<LLMClientConfig['retry']>;
   private readonly hooks: LLMClientHooks;
   private readonly cache: LLMClientConfig['cache'] | undefined;
+  private readonly factory: ProviderFactory;
+  private readonly cbConfig: NonNullable<LLMClientConfig['circuitBreaker']>;
 
   constructor(
     config: LLMClientConfig,
@@ -102,10 +104,10 @@ export class LLMClient {
     if (config.providers.length === 0) {
       throw new Error('LLMClient requires at least one provider');
     }
-    const cbConfig = config.circuitBreaker ?? { failureThreshold: 5, resetTimeMs: 60_000 };
+    this.cbConfig = config.circuitBreaker ?? { failureThreshold: 5, resetTimeMs: 60_000 };
     this.slots = config.providers.map((p) => ({
       provider: factory(p),
-      breaker: new CircuitBreaker(cbConfig),
+      breaker: new CircuitBreaker(this.cbConfig),
       config: p,
     }));
     this.budget = config.budget
@@ -114,6 +116,49 @@ export class LLMClient {
     this.retryConfig = config.retry ?? { maxAttempts: 3, baseDelayMs: 500 };
     this.hooks = hooks;
     this.cache = config.cache ?? undefined;
+    this.factory = factory;
+  }
+
+  /**
+   * Atomically swap the provider ladder at runtime. In-flight requests on
+   * the previous slots complete normally (they hold their own reference to
+   * the slot array slice). New requests use the new ladder.
+   *
+   * For rollback safety: callers should run `pingNewLadder()` first to
+   * validate the new config before committing.
+   */
+  reloadConfig(newProviders: readonly ProviderConfig[]): void {
+    if (newProviders.length === 0) {
+      throw new Error('LLMClient.reloadConfig requires at least one provider');
+    }
+    this.slots = newProviders.map((p) => ({
+      provider: this.factory(p),
+      breaker: new CircuitBreaker(this.cbConfig),
+      config: p,
+    }));
+  }
+
+  /** Snapshot of the current provider ladder (for GET /api/config/models). */
+  getProviderConfigs(): readonly ProviderConfig[] {
+    return this.slots.map((s) => s.config);
+  }
+
+  /**
+   * Ping the TOP provider in a proposed ladder with a tiny "say hi" prompt
+   * to validate it responds + parses. Used as a pre-commit sanity check
+   * before `reloadConfig`.
+   */
+  async pingNewLadder(newProviders: readonly ProviderConfig[]): Promise<{ ok: boolean; error?: string }> {
+    if (newProviders.length === 0) return { ok: false, error: 'empty ladder' };
+    const top = newProviders[0]!;
+    try {
+      const p = this.factory(top);
+      const resp = await p.chatSync([{ role: 'user', content: 'ping' }], { maxTokens: 8 });
+      if (!Array.isArray(resp.content)) return { ok: false, error: 'non-array content' };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
   }
 
   /** Non-streaming call. Tries providers in order until one succeeds. */
