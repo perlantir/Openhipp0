@@ -26,7 +26,7 @@ import {
   type DecisionStatus,
 } from '../decisions/index.js';
 import { searchSessions, escapeFts5 } from '../recall/index.js';
-import { skills as skillsTable } from '../db/schema.js';
+import { skills as skillsTable, auditLog as auditLogTable } from '../db/schema.js';
 
 // ─── route shape (structural; matches @openhipp0/bridge.Route) ───────────
 
@@ -183,6 +183,41 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
     },
     {
       method: 'GET',
+      path: '/api/audit',
+      async handler(ctx) {
+        const projectId = ctx.query['projectId'];
+        const agentId = ctx.query['agentId'];
+        const action = ctx.query['action'];
+        const limit = clampLimit(ctx.query['limit'], 100, 500);
+        const conditions = [];
+        if (projectId) conditions.push(eq(auditLogTable.projectId, projectId));
+        if (agentId) conditions.push(eq(auditLogTable.agentId, agentId));
+        if (action) conditions.push(eq(auditLogTable.action, action));
+        const where = conditions.length > 0
+          ? (conditions.length === 1 ? conditions[0] : and(...conditions))
+          : undefined;
+        const query = opts.db
+          .select({
+            id: auditLogTable.id,
+            projectId: auditLogTable.projectId,
+            agentId: auditLogTable.agentId,
+            userId: auditLogTable.userId,
+            action: auditLogTable.action,
+            targetType: auditLogTable.targetType,
+            targetId: auditLogTable.targetId,
+            details: auditLogTable.details,
+            costUsd: auditLogTable.costUsd,
+            createdAt: auditLogTable.createdAt,
+          })
+          .from(auditLogTable)
+          .orderBy(desc(auditLogTable.createdAt))
+          .limit(limit);
+        const rows = await (where ? query.where(where) : query);
+        return { body: { events: rows } };
+      },
+    },
+    {
+      method: 'GET',
       path: '/api/skills',
       async handler(ctx) {
         const projectId = ctx.query['projectId'];
@@ -239,6 +274,12 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
   }
 
   return routes;
+}
+
+function clampLimit(raw: string | undefined, def: number, max: number): number {
+  const n = raw ? parseInt(raw, 10) : def;
+  if (!Number.isFinite(n) || n <= 0) return def;
+  return Math.min(n, max);
 }
 
 function parseStatus(value: string | undefined): DecisionStatus | undefined {

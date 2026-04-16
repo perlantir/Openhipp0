@@ -170,6 +170,35 @@ describe('createApiRoutes', () => {
     expect(rows[0]?.id).toBe('s1');
   });
 
+  it('GET /api/audit returns rows newest-first, filterable by agent/action/project', async () => {
+    await seedProject(db, 'p1');
+    const client = db.$client;
+    const insert = client.prepare(
+      `INSERT INTO audit_log (id, project_id, agent_id, user_id, action, target_type, target_id, details, cost_usd, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run('a1', 'p1', 'claude', null, 'tool.execute', 'tool', 't', '{}', 0.01, '2026-04-16T10:00:00Z');
+    insert.run('a2', 'p1', 'claude', null, 'approval.decide', 'approval', 'r1', '{}', 0, '2026-04-16T11:00:00Z');
+    insert.run('a3', 'p1', 'other-agent', null, 'tool.execute', 'tool', 't', '{}', 0, '2026-04-16T12:00:00Z');
+
+    const routes = createApiRoutes({ db });
+    const list = findRoute(routes, 'GET', '/api/audit');
+
+    // All events, newest first.
+    const all = await call(list, { query: { projectId: 'p1' } });
+    const events = (all.body as { events: Array<{ id: string; createdAt: string }> }).events;
+    expect(events).toHaveLength(3);
+    expect(events[0]?.id).toBe('a3');
+
+    // Filter by agentId.
+    const byAgent = await call(list, { query: { projectId: 'p1', agentId: 'claude' } });
+    expect((byAgent.body as { events: unknown[] }).events).toHaveLength(2);
+
+    // Filter by action.
+    const byAction = await call(list, { query: { projectId: 'p1', action: 'approval.decide' } });
+    expect((byAction.body as { events: Array<{ id: string }> }).events[0]?.id).toBe('a2');
+  });
+
   it('requireBearer=true enforces auth on every route', async () => {
     const routes = createApiRoutes({ db, requireBearer: 's3cret' });
     const stats = findRoute(routes, 'GET', '/api/memory/stats');

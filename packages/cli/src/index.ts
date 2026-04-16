@@ -51,6 +51,18 @@ export { runInit, nodePrompt };
 export { runConfigGet, runConfigSet };
 export { runStart, runStatus, runStop };
 export { runServe } from './commands/serve.js';
+// Retro-A/C surface — exported so e2e tests + downstream packages can
+// wire the unified auth middleware, pairing routes, and RLS middleware
+// without reaching into `./commands/*.js` subpaths.
+export { buildApiAuth } from './commands/api-auth.js';
+export type { ApiKeyResolver, AuthMiddleware, AuthResolution } from './commands/api-auth.js';
+export { buildPairingRoutes } from './commands/pairing-routes.js';
+export type { PairingDeps } from './commands/pairing-routes.js';
+export { buildRlsMiddleware, chainMiddleware } from './commands/rls-middleware.js';
+export type { RlsDb } from './commands/rls-middleware.js';
+export { buildVoiceRoutes } from './commands/voice-routes.js';
+export { buildPushRoutes } from './commands/push-routes.js';
+export { buildWidgetsRoutes } from './commands/widgets-routes.js';
 export { runDoctor, buildDefaultRegistry } from './commands/doctor.js';
 export {
   runSkillAudit,
