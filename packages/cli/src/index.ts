@@ -29,6 +29,8 @@ import {
   runMigrateRestore,
   runUpdate,
 } from './commands/misc.js';
+import { runMigrateOpenClaw } from './commands/migrate-openclaw.js';
+import { runMigrateHermes } from './commands/migrate-hermes.js';
 import { Hipp0CliError, type CommandResult } from './types.js';
 
 export const packageName = '@openhipp0/cli' as const;
@@ -68,6 +70,16 @@ export {
   runMigrateRestore,
   runUpdate,
 } from './commands/misc.js';
+export { runMigrateOpenClaw } from './commands/migrate-openclaw.js';
+export { runMigrateHermes } from './commands/migrate-hermes.js';
+export type { MigrationFs, MigrationPlan, MigrationOp, MigrationReport } from './commands/migrate-shared.js';
+export {
+  detectOpenClawSource,
+  detectHermesSource,
+  parseMemoryEntries,
+  formatPlan,
+  nodeMigrationFs,
+} from './commands/migrate-shared.js';
 
 export interface CliOptions {
   /** Emit a single JSON line on stdout instead of human-readable text. */
@@ -390,6 +402,52 @@ export function createProgram(): Command {
       emit(result, global);
       process.exit(result.exitCode);
     });
+
+  migrate
+    .command('openclaw')
+    .description('migrate from ~/.openclaw (or .clawdbot/.moltbot) → ~/.hipp0')
+    .option('--source <path>', 'override auto-detected source directory')
+    .option('--preset <preset>', 'full | user-data (default user-data)', 'user-data')
+    .option('--dry-run', 'preview without writing anything', false)
+    .option('--non-interactive', 'implies --dry-run unless --dry-run=false', false)
+    .action(
+      async (opts: { source?: string; preset: string; dryRun: boolean; nonInteractive: boolean }) => {
+        const global = program.opts<CliOptions>();
+        const preset: 'full' | 'user-data' = opts.preset === 'full' ? 'full' : 'user-data';
+        const runOpts: Parameters<typeof runMigrateOpenClaw>[0] = {
+          preset,
+          dryRun: opts.dryRun,
+          nonInteractive: opts.nonInteractive,
+        };
+        if (opts.source !== undefined) runOpts.source = opts.source;
+        const result = await runMigrateOpenClaw(runOpts);
+        emit(result, global);
+        process.exit(result.exitCode);
+      },
+    );
+
+  migrate
+    .command('hermes')
+    .description('migrate from ~/.hermes → ~/.hipp0')
+    .option('--source <path>', 'override auto-detected source directory')
+    .option('--preset <preset>', 'full | user-data (default user-data)', 'user-data')
+    .option('--dry-run', 'preview without writing anything', false)
+    .option('--non-interactive', 'implies --dry-run unless --dry-run=false', false)
+    .action(
+      async (opts: { source?: string; preset: string; dryRun: boolean; nonInteractive: boolean }) => {
+        const global = program.opts<CliOptions>();
+        const preset: 'full' | 'user-data' = opts.preset === 'full' ? 'full' : 'user-data';
+        const runOpts: Parameters<typeof runMigrateHermes>[0] = {
+          preset,
+          dryRun: opts.dryRun,
+          nonInteractive: opts.nonInteractive,
+        };
+        if (opts.source !== undefined) runOpts.source = opts.source;
+        const result = await runMigrateHermes(runOpts);
+        emit(result, global);
+        process.exit(result.exitCode);
+      },
+    );
 
   program
     .command('benchmark')
