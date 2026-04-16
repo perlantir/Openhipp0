@@ -131,6 +131,37 @@ importers:
         specifier: ^7.3.2
         version: 7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)
 
+  packages/e2e:
+    dependencies:
+      '@openhipp0/bridge':
+        specifier: workspace:*
+        version: link:../bridge
+      '@openhipp0/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@openhipp0/core':
+        specifier: workspace:*
+        version: link:../core
+      '@openhipp0/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@openhipp0/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
+      '@openhipp0/watchdog':
+        specifier: workspace:*
+        version: link:../watchdog
+      ws:
+        specifier: ^8.18.0
+        version: 8.20.0
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.13
+        version: 8.18.1
+
   packages/memory:
     dependencies:
       '@openhipp0/core':
