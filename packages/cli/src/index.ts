@@ -462,20 +462,25 @@ export function createProgram(): Command {
 
   program
     .command('update')
-    .description('update hipp0 (Phase 8 placeholder)')
-    .option('--dry-run', 'preview without applying', false)
-    .option('--rollback', 'revert to the last good version', false)
-    .option('--canary', 'update one instance as canary', false)
-    .action(async (opts: { dryRun: boolean; rollback: boolean; canary: boolean }) => {
-      const global = program.opts<CliOptions>();
-      const result = await runUpdate({
-        dryRun: opts.dryRun,
-        rollback: opts.rollback,
-        canary: opts.canary,
-      });
-      emit(result, global);
-      process.exit(result.exitCode);
-    });
+    .description('check for updates, install the latest release, rollback, or switch to canary')
+    .option('--check', 'check the registry without installing', false)
+    .option('--dry-run', 'show what would be upgraded without applying', false)
+    .option('--rollback', 'revert to the previous version', false)
+    .option('--canary', 'install the canary (pre-release) channel', false)
+    .action(
+      async (opts: { check: boolean; dryRun: boolean; rollback: boolean; canary: boolean }) => {
+        const global = program.opts<CliOptions>();
+        const result = await runUpdate({
+          check: opts.check,
+          dryRun: opts.dryRun,
+          rollback: opts.rollback,
+          canary: opts.canary,
+          currentVersion: version,
+        });
+        emit(result, global);
+        process.exit(result.exitCode);
+      },
+    );
 
   return program;
 }

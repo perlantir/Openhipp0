@@ -85,10 +85,18 @@ describe('runBenchmark', () => {
 });
 
 describe('runUpdate', () => {
-  it('returns phase 8 placeholder with mode label', async () => {
-    const result = await runUpdate({ dryRun: true, canary: true });
+  it('dry-run + canary shows would-upgrade preview', async () => {
+    const fetcher = (async () =>
+      new Response(JSON.stringify({ 'dist-tags': { canary: '2.0.0-canary.1' } }), { status: 200 })) as unknown as typeof fetch;
+    const result = await runUpdate({
+      dryRun: true,
+      canary: true,
+      currentVersion: '1.0.0',
+      fetch: fetcher,
+    });
     expect(result.exitCode).toBe(0);
     const text = result.stdout?.join('\n') ?? '';
-    expect(text).toContain('dry-run+canary');
+    expect(text).toContain('canary');
+    expect(text).toContain('2.0.0-canary.1');
   });
 });

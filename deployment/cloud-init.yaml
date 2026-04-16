@@ -1,0 +1,59 @@
+#cloud-config
+# cloud-init template for one-click Open Hipp0 deployment on any VPS that
+# speaks cloud-init (DigitalOcean, Hetzner, Linode, Vultr, AWS EC2, GCP).
+#
+# Usage: paste this into your provider's "User Data" field and launch.
+#
+# REQUIRED substitutions (or pre-seed via cloud-init user-vars):
+#   {{ANTHROPIC_API_KEY}}   — your Anthropic API key
+#
+# OPTIONAL:
+#   {{HIPP0_VERSION}}       — pin a specific version (default: latest)
+
+package_update: true
+packages:
+  - curl
+  - git
+  - build-essential
+
+users:
+  - default
+  - name: hipp0
+    system: true
+    shell: /usr/sbin/nologin
+    home: /home/hipp0
+    create_home: true
+
+write_files:
+  - path: /etc/hipp0/install.env
+    permissions: '0600'
+    owner: hipp0:hipp0
+    content: |
+      HIPP0_VERSION={{HIPP0_VERSION}}
+      ANTHROPIC_API_KEY={{ANTHROPIC_API_KEY}}
+      SKIP_ONBOARD=1
+      INSTALL_DAEMON=1
+
+runcmd:
+  # Install Docker (optional — used for sandboxed tool execution).
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker hipp0 || true
+
+  # Fetch + run the Open Hipp0 installer.
+  - |
+    set -a && source /etc/hipp0/install.env && set +a
+    curl -fsSL https://get.openhipp0.com/install | \
+      HIPP0_VERSION="$HIPP0_VERSION" \
+      SKIP_ONBOARD="$SKIP_ONBOARD" \
+      INSTALL_DAEMON="$INSTALL_DAEMON" \
+      ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+      bash
+
+  # Wait for systemd to finish wiring the service and verify.
+  - sleep 5
+  - systemctl status hipp0.service --no-pager || true
+  - curl -fsS http://127.0.0.1:3100/health || echo "health check pending; check logs via journalctl -u hipp0"
+
+final_message: |
+  Open Hipp0 provisioned. Dashboard: http://$IP_ADDRESS:3200
+  API health: http://$IP_ADDRESS:3100/health

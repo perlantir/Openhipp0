@@ -129,21 +129,119 @@ export interface UpdateOptions {
   dryRun?: boolean;
   rollback?: boolean;
   canary?: boolean;
+  check?: boolean;
+  /** Injected fetch for tests. */
+  fetch?: typeof fetch;
+  /** Injected exec for tests (runs npm install / hipp0 doctor). */
+  exec?: (cmd: string) => Promise<{ stdout: string; stderr: string; code: number }>;
+  /** Current version — defaults to the CLI package version. */
+  currentVersion?: string;
+}
+
+interface NpmPackument {
+  'dist-tags'?: { latest?: string; canary?: string };
+}
+
+async function fetchLatest(
+  channel: 'latest' | 'canary',
+  fetcher: typeof fetch,
+): Promise<string | null> {
+  try {
+    const resp = await fetcher('https://registry.npmjs.org/@openhipp0/cli', {
+      headers: { accept: 'application/vnd.npm.install-v1+json' },
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as NpmPackument;
+    return data['dist-tags']?.[channel] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function defaultExec(cmd: string): Promise<{ stdout: string; stderr: string; code: number }> {
+  const { exec } = await import('node:child_process');
+  return new Promise((resolve) => {
+    exec(cmd, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ stdout, stderr, code: err ? (err as NodeJS.ErrnoException).code === undefined ? 1 : 1 : 0 });
+    });
+  });
 }
 
 export async function runUpdate(opts: UpdateOptions = {}): Promise<CommandResult> {
-  const modes: string[] = [];
-  if (opts.dryRun) modes.push('dry-run');
-  if (opts.rollback) modes.push('rollback');
-  if (opts.canary) modes.push('canary');
-  const modeLabel = modes.length === 0 ? 'default' : modes.join('+');
+  const fetcher = opts.fetch ?? fetch;
+  const exec = opts.exec ?? defaultExec;
+  const current = opts.currentVersion ?? '0.0.0';
+
+  if (opts.check) {
+    const latest = await fetchLatest('latest', fetcher);
+    return {
+      exitCode: 0,
+      stdout: [
+        `current:  ${current}`,
+        `latest:   ${latest ?? '(registry unreachable)'}`,
+        latest && latest !== current
+          ? `→ run ${`\`hipp0 update\``} to upgrade`
+          : `→ up to date`,
+      ],
+      data: { current, latest },
+    };
+  }
+
+  if (opts.rollback) {
+    const result = await exec('npm install -g @openhipp0/cli@previous');
+    return {
+      exitCode: result.code === 0 ? 0 : 1,
+      stdout: [`rollback: ${result.code === 0 ? 'succeeded' : 'failed'}`, result.stdout.trim()].filter(Boolean),
+      ...(result.stderr && { stderr: [result.stderr] }),
+    };
+  }
+
+  const channel: 'latest' | 'canary' = opts.canary ? 'canary' : 'latest';
+  const target = await fetchLatest(channel, fetcher);
+  if (!target) {
+    return { exitCode: 1, stderr: ['npm registry unreachable; cannot determine target version.'] };
+  }
+  if (target === current && !opts.canary) {
+    return { exitCode: 0, stdout: [`already on ${current}.`] };
+  }
+  if (opts.dryRun) {
+    return {
+      exitCode: 0,
+      stdout: [`would upgrade ${current} → ${target} (${channel})`],
+      data: { current, target, channel },
+    };
+  }
+
+  // Backup ~/.hipp0/config.json before doing anything destructive.
+  const home = process.env['HIPP0_HOME'] ?? `${process.env['HOME']}/.hipp0`;
+  const backupPath = `${home}/config.backup.${Date.now()}.json`;
+  await exec(`cp -f ${home}/config.json ${backupPath} 2>/dev/null || true`);
+
+  const installCmd = `npm install -g @openhipp0/cli@${target}`;
+  const installResult = await exec(installCmd);
+  if (installResult.code !== 0) {
+    return { exitCode: 1, stderr: [`install failed: ${installResult.stderr}`] };
+  }
+
+  // Post-install doctor — if it fails, auto-rollback.
+  const doctor = await exec('hipp0 doctor');
+  if (doctor.code !== 0) {
+    await exec(`npm install -g @openhipp0/cli@${current}`);
+    return {
+      exitCode: 1,
+      stderr: [
+        `post-upgrade doctor failed; rolled back to ${current}.`,
+        `config backup preserved at ${backupPath}`,
+      ],
+    };
+  }
+
   return {
     exitCode: 0,
     stdout: [
-      `hipp0 update (${modeLabel}): operator tooling ships in Phase 8.`,
-      '  See @openhipp0/watchdog: AtomicUpdater / CanaryUpdater / BackupHandle.',
-      '  Dashboards and CI integrations land with the Phase 8 release.',
+      `upgraded ${current} → ${target} (${channel})`,
+      `config backup: ${backupPath}`,
     ],
-    data: { modes },
+    data: { from: current, to: target, channel, backupPath },
   };
 }
