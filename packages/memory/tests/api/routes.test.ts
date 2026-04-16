@@ -67,6 +67,60 @@ describe('createApiRoutes', () => {
     expect(second.status).toBe(409);
   });
 
+  it('POST /api/v1/agent/chat returns 501 when no agentHandler is wired', async () => {
+    await seedProject(db, 'p1');
+    const routes = createApiRoutes({ db });
+    const chat = findRoute(routes, 'POST', '/api/v1/agent/chat');
+    const r = await call(chat, {
+      body: { projectId: 'p1', message: 'hi' },
+    });
+    expect(r.status).toBe(501);
+  });
+
+  it('POST /api/v1/agent/chat invokes agentHandler + returns the reply', async () => {
+    await seedProject(db, 'p1');
+    const routes = createApiRoutes({
+      db,
+      agentHandler: async (req) => ({
+        text: `got: ${req.message}`,
+        messages: [],
+        iterations: 1,
+      }),
+    });
+    const chat = findRoute(routes, 'POST', '/api/v1/agent/chat');
+    const r = await call(chat, { body: { projectId: 'p1', message: 'hello' } });
+    expect(r.status).toBe(200);
+    expect((r.body as { text: string }).text).toBe('got: hello');
+  });
+
+  it('POST /api/v1/agent/chat dedups by idempotencyKey within 60 s', async () => {
+    await seedProject(db, 'p1');
+    let calls = 0;
+    const routes = createApiRoutes({
+      db,
+      agentHandler: async (req) => {
+        calls++;
+        return { text: `call ${calls}: ${req.message}`, messages: [], iterations: 1 };
+      },
+    });
+    const chat = findRoute(routes, 'POST', '/api/v1/agent/chat');
+    const key = 'dedup-key-1';
+    const first = await call(chat, { body: { projectId: 'p1', message: 'x', idempotencyKey: key } });
+    const second = await call(chat, { body: { projectId: 'p1', message: 'x', idempotencyKey: key } });
+    expect(calls).toBe(1);
+    expect(first.body).toEqual(second.body);
+  });
+
+  it('POST /api/v1/agent/chat rejects missing projectId / message', async () => {
+    const routes = createApiRoutes({
+      db,
+      agentHandler: async () => ({ text: '', messages: [], iterations: 0 }),
+    });
+    const chat = findRoute(routes, 'POST', '/api/v1/agent/chat');
+    const r = await call(chat, { body: { message: 'x' } });
+    expect(r.status).toBe(400);
+  });
+
   it('POST /api/feedback stores a row + GET /api/skills/:id/rewards aggregates', async () => {
     await seedProject(db, 'p1');
     const routes = createApiRoutes({ db });

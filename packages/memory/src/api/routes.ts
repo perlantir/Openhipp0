@@ -112,7 +112,70 @@ export interface ApiRouteOptions {
    *  through a mock req). Called with the handler context and must return
    *  true to allow the request. */
   authorize?: (ctx: ApiRouteContext & { authorization?: string }) => boolean;
+  /**
+   * Agent handler for POST /api/v1/agent/chat. When absent, the route
+   * returns 501 (not wired). Callers (serve.ts) construct this via
+   * buildAgentMessageHandler, threaded through.
+   */
+  agentHandler?: (req: AgentChatRequest) => Promise<AgentChatResponse>;
+  /** Idempotency cache for duplicate-key dedup (default: in-memory 60 s). */
+  idempotencyStore?: IdempotencyStore;
 }
+
+export interface AgentChatRequest {
+  projectId: string;
+  agentId?: string;
+  userId?: string;
+  message: string;
+  conversation?: readonly {
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+  }[];
+  /** Client-generated UUID for dedup. Optional but recommended. */
+  idempotencyKey?: string;
+}
+
+export interface AgentChatResponse {
+  text: string;
+  messages: readonly unknown[];
+  iterations: number;
+  toolCallsCount?: number;
+  stoppedReason?: string;
+}
+
+export interface IdempotencyStore {
+  get(key: string): Promise<AgentChatResponse | null> | AgentChatResponse | null;
+  set(key: string, value: AgentChatResponse, ttlMs: number): Promise<void> | void;
+}
+
+/** Default in-memory idempotency store — 60 s TTL, LRU-capped at 1024 keys. */
+export function createInMemoryIdempotencyStore(
+  opts: { ttlMs?: number; maxKeys?: number } = {},
+): IdempotencyStore {
+  const ttlMs = opts.ttlMs ?? 60_000;
+  const maxKeys = opts.maxKeys ?? 1024;
+  const map = new Map<string, { value: AgentChatResponse; expiresAt: number }>();
+  return {
+    get(key: string) {
+      const entry = map.get(key);
+      if (!entry) return null;
+      if (entry.expiresAt < Date.now()) {
+        map.delete(key);
+        return null;
+      }
+      return entry.value;
+    },
+    set(key: string, value: AgentChatResponse) {
+      if (map.size >= maxKeys) {
+        const firstKey = map.keys().next().value;
+        if (firstKey) map.delete(firstKey);
+      }
+      map.set(key, { value, expiresAt: Date.now() + ttlMs });
+    },
+  };
+}
+
+const defaultIdempotencyStore = createInMemoryIdempotencyStore();
 
 export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
   const routes: ApiRoute[] = [
@@ -341,6 +404,34 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
             byModel: [...byModel.entries()].map(([name, v]) => ({ name, ...v })),
           },
         };
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/v1/agent/chat',
+      async handler(ctx) {
+        if (!opts.agentHandler) {
+          return {
+            status: 501,
+            body: { error: 'agent runtime not wired on this server' },
+          };
+        }
+        const body = ctx.body as AgentChatRequest | undefined;
+        if (!body || typeof body.projectId !== 'string' || typeof body.message !== 'string') {
+          return { status: 400, body: { error: 'projectId + message required' } };
+        }
+        const key = body.idempotencyKey;
+        if (key) {
+          const store = opts.idempotencyStore ?? defaultIdempotencyStore;
+          const cached = await store.get(key);
+          if (cached) return { status: 200, body: cached };
+        }
+        const resp = await opts.agentHandler(body);
+        if (key) {
+          const store = opts.idempotencyStore ?? defaultIdempotencyStore;
+          await store.set(key, resp, 60_000);
+        }
+        return { status: 200, body: resp };
       },
     },
     {

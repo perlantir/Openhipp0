@@ -343,9 +343,37 @@ async function buildApiRoutes(opts: {
     opts.databaseUrl ? { databaseUrl: opts.databaseUrl } : undefined,
   );
   await memory.db.runMigrations(client);
+
+  // Build an agent handler for POST /api/v1/agent/chat if a provider key is
+  // in the env — otherwise the route returns 501 (honest: no agent wired).
+  let agentHandler: import('@openhipp0/memory').ApiRouteOptions['agentHandler'];
+  if (process.env['ANTHROPIC_API_KEY'] || process.env['OPENAI_API_KEY']) {
+    const built = await buildAgentMessageHandler({ db: client });
+    if (built) {
+      agentHandler = async (req) => {
+        const syntheticMsg: IncomingMessage = {
+          platform: 'web',
+          id: `api-${Math.random().toString(36).slice(2, 10)}`,
+          channel: { id: `api:${req.projectId}:${req.userId ?? 'anon'}`, name: 'api', isDM: true },
+          user: { id: req.userId ?? 'api-user', name: 'api-user' },
+          text: req.message,
+          timestamp: Date.now(),
+          platformData: { frameType: 'message' },
+        };
+        const resp = await built(syntheticMsg);
+        return {
+          text: resp?.text ?? '',
+          messages: [],
+          iterations: 1,
+        };
+      };
+    }
+  }
+
   const routes = memory.createApiRoutes({
     db: client,
     ...(opts.apiToken && { requireBearer: opts.apiToken }),
+    ...(agentHandler && { agentHandler }),
   });
   // The memory route shape is structurally compatible with bridge's Route —
   // both use { method, path, handler({params, query, body}) -> { status?, body? } }.

@@ -29,6 +29,7 @@ from .types import (
     SessionRow,
 )
 from .auto import auto
+from .agent import Agent, AgentResponse, ConversationTurn
 
 __all__ = [
     "Hipp0Client",
@@ -43,5 +44,8 @@ __all__ = [
     "MemoryHit",
     "SessionRow",
     "auto",
+    "Agent",
+    "AgentResponse",
+    "ConversationTurn",
     "__version__",
 ]
