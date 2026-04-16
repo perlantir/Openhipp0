@@ -72,6 +72,29 @@ export * as enterprise from './enterprise/index.js';
 /** Training data pipeline: trajectory export, batch runner, compression (Phase 15). */
 export * as training from './training/index.js';
 
+// Ergonomic top-level re-exports for consumers (e2e, SDK).
+export {
+  toJsonl,
+  fromJsonl,
+  toSftExamples,
+  toDpoExamples,
+  toAtropos,
+  compressTrajectory,
+  runBatch,
+  createMemoryCheckpointStore,
+} from './training/index.js';
+export type {
+  Trajectory,
+  TrajectoryMessage,
+  TrajectoryOutcome,
+  TrajectoryDecision,
+  TrajectorySkill,
+  SftExample,
+  DpoExample,
+  AtroposTrajectory,
+  Task as TrainingTask,
+} from './training/index.js';
+
 // Top-level re-exports — consumers in @openhipp0/bridge etc. want to use the
 // MediaEngine + stub classes without the `media.` namespace prefix.
 export {

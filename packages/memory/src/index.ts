@@ -33,3 +33,20 @@ export * as adapter from './adapter/index.js';
 
 /** External-platform connectors (Notion / Linear / Slack / GitHub-PR / Confluence) — Phase 16. */
 export * as connectors from './connectors/index.js';
+
+// Top-level re-exports of connector helpers for ergonomic consumer imports.
+export {
+  createMemoryDedupStore,
+  ingestItem,
+  hashContent,
+  looksDecisionBearing,
+} from './connectors/index.js';
+export type {
+  ConnectorItem,
+  ConnectorSource,
+  DistilleryHooks,
+  SyncOptions,
+  SyncReport,
+  Connector,
+  ConnectorDedupStore,
+} from './connectors/index.js';
