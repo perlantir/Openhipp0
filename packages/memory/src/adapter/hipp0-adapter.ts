@@ -29,6 +29,8 @@ import type {
   SessionSummary,
 } from '@openhipp0/core';
 import type { Message } from '@openhipp0/core';
+import { security } from '@openhipp0/core';
+import { tagRecallHits } from '../injection/tag.js';
 import type { HipppoDb } from '../db/client.js';
 import { sessionHistory, type NewSessionHistory } from '../db/schema.js';
 import { compileFromDecisions, type CompressionFormat } from '../compile/index.js';
@@ -42,7 +44,7 @@ import {
   type SkillWriter,
   type Turn,
 } from '../learning/index.js';
-import { searchSessions, escapeFts5, naiveSessionSummarizer } from '../recall/index.js';
+import { searchSessions, escapeFts5 } from '../recall/index.js';
 import {
   applyUpdate,
   getUserModel,
@@ -109,6 +111,10 @@ export class Hipp0MemoryAdapter implements MemoryAdapter {
     }
 
     // --- Recall (FTS5) ---
+    // Phase 21 wiring: every recall hit is tagged with ProvenanceTag and
+    // low/untrusted hits are wrapped with spotlighting delimiters before
+    // they reach the LLM. This is the load-bearing injection defense —
+    // previously exported but never called.
     if (this.opts.enableRecall !== false) {
       try {
         const hits = searchSessions(db, req.projectId, escapeFts5(req.query), {
@@ -116,8 +122,17 @@ export class Hipp0MemoryAdapter implements MemoryAdapter {
           agentId: req.agent.id,
         });
         if (hits.length > 0) {
-          const body = await naiveSessionSummarizer(hits);
-          sections.push({ title: 'Past Sessions (recalled)', body });
+          const tagged = tagRecallHits(hits);
+          const anyUntrusted = tagged.some((t) => security.injection.isQuarantinedTrust(t.tag.trust));
+          const parts = tagged.map((t) => {
+            const body = `- ${t.hit.session.summary}`;
+            return security.injection.renderFragment({ tag: t.tag, text: body });
+          });
+          const header = anyUntrusted ? `${security.injection.SPOTLIGHT_HEADER}\n\n` : '';
+          sections.push({
+            title: 'Past Sessions (recalled)',
+            body: `${header}${parts.join('\n')}`,
+          });
         }
       } catch {
         /* swallow */

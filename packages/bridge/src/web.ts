@@ -28,6 +28,7 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage as HttpIncomingMessage } from 'node:http';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { security } from '@openhipp0/core';
 import {
   Hipp0BridgeError,
   Hipp0BridgeNotConnectedError,
@@ -316,6 +317,20 @@ export class WebBridge implements MessageBridge {
 
     const platformData: Record<string, unknown> = { frameType: type };
     if (clientRef) platformData.clientRef = clientRef;
+
+    // Phase 21: log-only injection detection. Suspicious patterns surface via
+    // emitError so operators can review; we never block the frame — pattern
+    // libraries can't keep up with novel attacks + the load-bearing defense
+    // is spotlighting of downstream untrusted content, not blocking input.
+    if (text.length > 0 && security.injection.looksSuspicious(text)) {
+      this.emitError(
+        new Hipp0BridgeError(
+          `possible prompt-injection pattern in ws:${channelId} (advisory)`,
+          WEB_PLATFORM,
+        ),
+      );
+      platformData.suspectedInjection = true;
+    }
 
     const msg: IncomingMessage = {
       platform: WEB_PLATFORM,
