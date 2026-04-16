@@ -51,6 +51,9 @@ export * as skills from './skills/index.js';
 /** Security: agent policy enforcement, templates, execution governance. */
 export * as security from './security/index.js';
 
+/** Multi-agent orchestrator: team config, skill-based routing, fallback. */
+export * as orchestrator from './orchestrator/index.js';
+
 // Runtime classes consumed by external packages (memory adapter, SDK).
 export { AgentRuntime } from './agent/index.js';
 export { LLMClient } from './llm/index.js';

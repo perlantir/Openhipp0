@@ -17,5 +17,8 @@
     "lint": "eslint src tests --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo coverage"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
   }
 }

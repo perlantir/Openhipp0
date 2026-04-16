@@ -96,7 +96,11 @@ importers:
         specifier: ^0.28.1
         version: 0.28.1
 
-  packages/scheduler: {}
+  packages/scheduler:
+    dependencies:
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
 
   packages/sdk: {}
 
