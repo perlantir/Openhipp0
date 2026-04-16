@@ -29,6 +29,10 @@ export interface NudgeSessionSnapshot {
 export interface FactDraft {
   content: string;
   category?: 'fact' | 'preference' | 'context' | 'other';
+  /** Phase 21 provenance — persisted onto memory_entries.origin. */
+  origin?: string;
+  /** Phase 21 trust level — persisted onto memory_entries.trust. */
+  trust?: 'high' | 'medium' | 'low' | 'untrusted';
 }
 
 export type FactExtractor = (session: NudgeSessionSnapshot) => Promise<FactDraft[]>;
@@ -81,6 +85,8 @@ export async function maybeNudge(
       ...(session.userId && { userId: session.userId }),
       content,
       category: draft.category ?? 'other',
+      ...(draft.origin !== undefined && { origin: draft.origin }),
+      ...(draft.trust !== undefined && { trust: draft.trust }),
     };
     if (opts.embeddingProvider) {
       const vec = await opts.embeddingProvider.embed(content);

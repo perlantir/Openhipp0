@@ -55,6 +55,23 @@ export function tagRecallHits(
   supplier?: SessionTagSupplier,
 ): readonly TaggedSession[] {
   return hits.map((hit) => {
+    // Row-level tags (Follow-up C) take precedence — if the session was
+    // written with a trust/origin after the schema bump, use those.
+    const row = hit.session as SessionHistory & {
+      origin?: string | null;
+      trust?: TrustLevel | null;
+    };
+    if (row.trust && row.origin) {
+      return {
+        tag: {
+          origin: row.origin as Origin,
+          trust: row.trust,
+          ref: hit.session.id,
+          label: `session:${hit.session.agentId}`,
+        },
+        hit,
+      };
+    }
     const supplied = supplier?.(hit.session);
     const tag = supplied ?? {
       ...DEFAULT_SESSION_TAG,

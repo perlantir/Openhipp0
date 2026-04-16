@@ -44,6 +44,34 @@ describe('tagRecallHits', () => {
   });
 });
 
+describe('tagRecallHits row-level precedence (Follow-up C)', () => {
+  it('row-level trust + origin override defaults', () => {
+    const hit = mkHit('abc', 'x');
+    (hit.session as Record<string, unknown>).origin = 'connector';
+    (hit.session as Record<string, unknown>).trust = 'low';
+    const tagged = tagRecallHits([hit]);
+    expect(tagged[0]?.tag.origin).toBe('connector');
+    expect(tagged[0]?.tag.trust).toBe('low');
+  });
+
+  it('row-level data beats supplier output', () => {
+    const hit = mkHit('abc', 'x');
+    (hit.session as Record<string, unknown>).origin = 'external';
+    (hit.session as Record<string, unknown>).trust = 'untrusted';
+    const tagged = tagRecallHits([hit], () => ({ origin: 'system', trust: 'high' }));
+    expect(tagged[0]?.tag.origin).toBe('external');
+    expect(tagged[0]?.tag.trust).toBe('untrusted');
+  });
+
+  it('row with only trust but no origin still falls back to supplier', () => {
+    const hit = mkHit('abc', 'x');
+    (hit.session as Record<string, unknown>).trust = 'low';
+    // origin missing → supplier (or defaults) wins
+    const tagged = tagRecallHits([hit]);
+    expect(tagged[0]?.tag.origin).toBe(DEFAULT_SESSION_TAG.origin);
+  });
+});
+
 describe('isQuarantined', () => {
   it('true for low/untrusted', () => {
     expect(isQuarantined({ origin: 'memory', trust: 'low' })).toBe(true);

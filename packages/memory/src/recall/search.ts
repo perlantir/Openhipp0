@@ -131,6 +131,10 @@ export async function listRecentSessions(
 // ─────────────────────────────────────────────────────────────────────────────
 
 function hydrateSession(raw: Record<string, unknown>): SessionHistory {
+  const trustRaw = raw.trust as string | null | undefined;
+  const trust = trustRaw === 'high' || trustRaw === 'medium' || trustRaw === 'low' || trustRaw === 'untrusted'
+    ? trustRaw
+    : null;
   return {
     id: String(raw.id),
     projectId: String(raw.project_id),
@@ -142,6 +146,8 @@ function hydrateSession(raw: Record<string, unknown>): SessionHistory {
     tokensUsed: Number(raw.tokens_used ?? 0),
     costUsd: Number(raw.cost_usd ?? 0),
     lineageParentId: (raw.lineage_parent_id as string | null) ?? null,
+    origin: (raw.origin as string | null) ?? null,
+    trust,
     createdAt: String(raw.created_at),
   };
 }

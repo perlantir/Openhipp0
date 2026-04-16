@@ -219,12 +219,16 @@ export const memoryEntries = sqliteTable(
       .default('other'),
     sourceSessionId: text('source_session_id'),
     embedding: text('embedding'),
+    /** Phase 21 provenance tagging — nullable for back-compat with pre-21 rows. */
+    origin: text('origin'),
+    trust: text('trust', { enum: ['high', 'medium', 'low', 'untrusted'] }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => ({
     projectAgentIdx: index('memory_entries_project_agent_idx').on(t.projectId, t.agentId),
     userIdx: index('memory_entries_user_idx').on(t.userId),
+    trustIdx: index('memory_entries_trust_idx').on(t.trust),
   }),
 );
 
@@ -246,11 +250,15 @@ export const sessionHistory = sqliteTable(
     tokensUsed: integer('tokens_used').notNull().default(0),
     costUsd: real('cost_usd').notNull().default(0),
     lineageParentId: text('lineage_parent_id'),
+    /** Phase 21 provenance tagging — nullable for back-compat. */
+    origin: text('origin'),
+    trust: text('trust', { enum: ['high', 'medium', 'low', 'untrusted'] }),
     createdAt: createdAt(),
   },
   (t) => ({
     projectAgentIdx: index('session_history_project_agent_idx').on(t.projectId, t.agentId),
     lineageIdx: index('session_history_lineage_idx').on(t.lineageParentId),
+    trustIdx: index('session_history_trust_idx').on(t.trust),
   }),
 );
 

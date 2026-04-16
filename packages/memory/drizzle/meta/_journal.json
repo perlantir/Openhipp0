@@ -8,6 +8,13 @@
       "when": 1776292448949,
       "tag": "0000_lame_lilandra",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1776369599080,
+      "tag": "0001_military_swordsman",
+      "breakpoints": true
     }
   ]
 }
