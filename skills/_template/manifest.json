@@ -1,0 +1,8 @@
+{
+  "name": "_template",
+  "description": "Skill scaffolding template. Copy this directory and edit in place.",
+  "version": "0.0.0",
+  "tools": [],
+  "dependencies": [],
+  "tags": ["template"]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "gmail",
+  "description": "Search and send emails through the authenticated Gmail account.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\b(email|gmail|inbox|send.*email)\\b",
+  "tools": ["gmail_search", "gmail_send"],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": ["email", "gmail", "google", "integration"]
+}

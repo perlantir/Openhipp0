@@ -1,0 +1,10 @@
+{
+  "name": "github",
+  "description": "Search GitHub repos, list issues, and create new issues.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\bgithub\\b|\\brepo(sitory)?\\b|\\bissue(s)?\\b",
+  "tools": ["github_search_repos", "github_list_issues", "github_create_issue"],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": ["developer", "github", "issues", "integration"]
+}

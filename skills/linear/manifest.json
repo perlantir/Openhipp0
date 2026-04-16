@@ -1,0 +1,10 @@
+{
+  "name": "linear",
+  "description": "List and create issues in a Linear workspace.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)\\blinear\\b|\\bticket(s)?\\b|\\bissue(s)?\\s+in\\s+linear",
+  "tools": ["linear_list_issues", "linear_create_issue"],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": ["developer", "linear", "issue-tracking", "integration"]
+}

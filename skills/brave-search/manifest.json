@@ -1,0 +1,10 @@
+{
+  "name": "brave-search",
+  "description": "Search the web via the Brave Search API.",
+  "version": "0.1.0",
+  "triggerPattern": "(?i)(search|look up|google|find info on)\\b",
+  "tools": ["brave_search"],
+  "dependencies": [],
+  "author": "Open Hipp0",
+  "tags": ["search", "web", "integration"]
+}

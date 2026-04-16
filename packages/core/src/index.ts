@@ -54,6 +54,15 @@ export * as security from './security/index.js';
 /** Multi-agent orchestrator: team config, skill-based routing, fallback. */
 export * as orchestrator from './orchestrator/index.js';
 
+/** Browser automation: Playwright-backed engine, page analyzer, 6 browser_* tools. */
+export * as browser from './browser/index.js';
+
+/** OAuth2 foundation: authorization-code + PKCE, token store, provider presets. */
+export * as auth from './auth/index.js';
+
+/** Third-party integrations: brave / github / gmail / linear (Phase 10). */
+export * as integrations from './integrations/index.js';
+
 // Runtime classes consumed by external packages (memory adapter, SDK).
 export { AgentRuntime } from './agent/index.js';
 export { LLMClient } from './llm/index.js';
