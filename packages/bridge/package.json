@@ -19,6 +19,7 @@
     "clean": "rm -rf dist .turbo coverage"
   },
   "dependencies": {
+    "@openhipp0/core": "workspace:*",
     "@slack/bolt": "^3.22.0",
     "discord.js": "^14.26.3",
     "grammy": "^1.42.0",

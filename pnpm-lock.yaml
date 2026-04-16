@@ -38,6 +38,9 @@ importers:
 
   packages/bridge:
     dependencies:
+      '@openhipp0/core':
+        specifier: workspace:*
+        version: link:../core
       '@slack/bolt':
         specifier: ^3.22.0
         version: 3.22.0
