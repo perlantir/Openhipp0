@@ -858,6 +858,46 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 21 — Prompt injection defense (`core/security/injection`)
+
+**DECISION:** Source-tagging types (`TrustLevel`, `Origin`, `ProvenanceTag`, `TaggedFragment`) live in core, structurally mirrored in memory
+
+- REASONING: Core cannot import from memory. Making core the authoritative home for the injection-defense vocabulary + duplicating the types as a structural match in memory follows the same pattern as `AgentSystemPromptSection` (Phase 2f). Both sides agree on literal strings for `TrustLevel` ('high'|'medium'|'low'|'untrusted'), so a memory hook that returns `{ trust: 'low' }` slots into a core `ProvenanceTag` without coercion.
+- AFFECTS: `packages/core/src/security/injection/types.ts`, `packages/memory/src/injection/tag.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Spotlighting wraps low + untrusted, not just untrusted
+
+- REASONING: Slack / email-to-ticket content defaults to `low` in the connectors matrix specifically because it can contain outside messages. Treating `low` as "safe to inject inline" negates the whole defense. Spotlight both; `partitionFragments` with `dropAtOrBelow: 'low'` is the tighter-setting escape hatch for operators that want to drop entirely instead of spotlight.
+- AFFECTS: `spotlight.renderFragment`, `quarantine.partitionFragments`.
+- CONFIDENCE: high.
+
+**DECISION:** Pattern detector logs, never blocks
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. Pattern libraries die against novel attacks; relying on them for blocking creates false confidence. The real defenses are spotlighting + quarantine (tag-level) and the policy engine + sandbox (execution-level). `looksSuspicious()` is advisory only and is wired into logs + UI hints, never into a deny path.
+- AFFECTS: `injection/detector.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Delimiter forgery in untrusted payloads is defanged by character substitution (`<` → `‹`), not by randomizing a hard-to-guess token
+
+- REASONING: Randomized tokens move the goal but don't eliminate it; a model can still be tricked by a forged `<<END UNTRUSTED>>` if it appears plausibly formed. Substituting the `<` in any copy that shows up inside the payload means the model literally cannot see a closing delimiter until our own wrapper writes one. Randomized seed stays as a secondary signal, useful for audit ("this UNTRUSTED tag id matches what the server emitted").
+- AFFECTS: `spotlight.escapeDelimiters`.
+- CONFIDENCE: medium — revisit if we see model-side delimiter confusion in production logs.
+
+**DECISION:** Memory-side tagging via a `SessionTagSupplier` callback, not a schema column (for now)
+
+- REASONING: Adding `origin` + `trust` columns to `memoryEntries` / `sessionHistory` would require a migration + backfill + schema drift against the API contract. The callback shape lets consumers who already know the origin/trust (e.g. connector-sourced memory items; Retro-B persists this on the callback side, just not the row side) plug it in today. Persisting to rows is the natural next step and is tracked in the remaining-work list.
+- AFFECTS: `packages/memory/src/injection/tag.ts`.
+- CONFIDENCE: medium.
+
+**DECISION:** Canary tokens + behavior-monitoring ML explicitly **cut** from v1
+
+- REASONING: Per scope doc. Canaries false-positive on legitimate "list my credentials" asks; behavior-monitoring needs a labeled dataset we don't have. Spotlighting + quarantine do the load-bearing work; everything else is noise until there's signal to train on.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
 ### Phase 20 — Evaluation framework (`@openhipp0/eval`)
 
 **DECISION:** New package `@openhipp0/eval`, not a subdir of `core` or `e2e`
