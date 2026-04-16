@@ -19,7 +19,7 @@ export interface BatchRequest {
   readonly options?: LLMOptions;
 }
 
-export type BatchStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'canceled';
+export type BatchStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'canceling' | 'canceled';
 
 export interface BatchResult {
   readonly id: string;
