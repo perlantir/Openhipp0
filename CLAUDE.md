@@ -474,6 +474,123 @@ CONFIDENCE: high | medium | low
 - AFFECTS: Gateway error handling semantics.
 - CONFIDENCE: medium.
 
+### Phase 4a — Process Watchdog
+
+**DECISION:** In-process watchdog only; out-of-process restart manager deferred to Phase 7+
+
+- REASONING: Phase 4's value is _soft_ recovery — catching memory pressure before OOM-kill, flagging GC thrashing, preserving state across intentional restarts. True kill-me-and-restart-me requires a process manager; that's an ops concern (`hipp0 start` wrapper + systemd / Docker restart policy), additive on top of what we shipped.
+- AFFECTS: `Watchdog` never calls `process.exit`; it only emits `pre_shutdown` and persists a snapshot.
+- CONFIDENCE: high.
+
+**DECISION:** State-snapshot schema is exported as a Zod literal (`SNAPSHOT_VERSION = 1`)
+
+- REASONING: This is the public contract a future out-of-process sidecar will read. Bumping the schema requires bumping the version literal; loaders must refuse unknown values. Keeping it inside `types.ts` (not buried in the snapshot store) makes the contract obvious.
+- AFFECTS: `packages/watchdog/src/types.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Crash-loop trip is one-shot until `reset()`; GC + heap detectors throttle internally
+
+- REASONING: Once safe mode is active, additional trips just spam the bus. Same logic for the GC detector (one emit per windowMs while pressure persists). Consumers don't get useful information from N copies of the same alert.
+- AFFECTS: `CrashLoopDetector`, `GcThrashDetector`.
+- CONFIDENCE: high.
+
+**DECISION:** Watchdog forwards subevents on its own bus + auto-trips safe mode on `heap_fatal` / `crash_loop`
+
+- REASONING: One subscription point for the consumer; each composed detector still emits its own events for callers that need granularity.
+- AFFECTS: `Watchdog.wireSubevents`.
+- CONFIDENCE: high.
+
+### Phase 4b-i + 4b-ii — Health system
+
+**DECISION:** All check probes (DB ping, LLM API-key check, bridge `isConnected`, disk `statfs`, Docker daemon ping, port probe) are constructor-injected — no cross-package imports
+
+- REASONING: Watchdog can't import from `memory` / `bridge` / etc. without inverting the package boundary matrix. Production CLI/runtime (Phase 7) wires real handles; tests inject deterministic stubs. Same precedent as Phase 2d learning callbacks.
+- AFFECTS: All `health/checks/*.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** AutoFix is opt-in at run-time (`registry.run({autoFix: true})`) and per-check optional
+
+- REASONING: Most checks have no safe autoFix (config write is destructive, port rebind requires app cooperation). Framework supports it; Phase 4b-i ships none implemented; concrete autoFixes land per-check as use cases mature. autoFix throws are captured (never re-thrown).
+- AFFECTS: `HealthRegistry.runOne`.
+- CONFIDENCE: high.
+
+**DECISION:** Severity composition is fixed: any `fail` → `fail`; else any `warn` → `warn`; else `ok`. `skipped` is informational only
+
+- REASONING: Spec-implied. `skipped` lets headless deploys silence a check (e.g., `BridgesCheck.treatEmptyAsSkipped: true`) without polluting the overall score.
+- CONFIDENCE: high.
+
+**DECISION:** `MemoryCheck` (system RAM) is distinct from Phase 4a's `HeapMonitor` (V8 heap)
+
+- REASONING: Two failure modes — host OOM and process heap-limit OOM — surface differently and need separate alerts. Same Watchdog can hold both.
+- CONFIDENCE: high.
+
+**DECISION:** `HealthDaemon` serializes ticks (no concurrent runs)
+
+- REASONING: A slow tick that overlaps the next interval would have two registry runs racing — events would interleave confusingly + the in-flight sample would be wasted work. `inFlight` flag drops the second tick rather than queueing.
+- AFFECTS: `daemon.ts`.
+- CONFIDENCE: high.
+
+### Phase 4c — Safe Updates
+
+**DECISION:** Stage callbacks (migrate / smokeTest / commit / observe) are caller-supplied; updater owns no domain knowledge
+
+- REASONING: Updates can mean migrating a Drizzle schema, swapping a node_modules version, flipping a feature flag — none of which the watchdog package should know about. Same injection pattern as health probes.
+- AFFECTS: `AtomicUpdater`, `CanaryUpdater`.
+- CONFIDENCE: high.
+
+**DECISION:** Backup uses POSIX `rename` after `cp` for the manifest write; per-source files are copied directly into a fresh timestamped dir
+
+- REASONING: The destination dir is fresh per backup → there's no half-state to overwrite during file copies. The manifest write at the end is the durable "this backup is consistent" marker; if we crash before writing it, the next `openBackup` fails cleanly.
+- AFFECTS: `backup.ts`.
+- CONFIDENCE: medium.
+
+**DECISION:** Rollback is allowed to throw (Hipp0RollbackFailedError); update-stage failures are NOT
+
+- REASONING: A failed migrate/smoke is recoverable (we have the backup); a failed rollback is not (the package is out of options) — bubble it up so a human sees it. Stage failures stay in the structured `UpdateResult` so callers can log/notify without exception handling.
+- AFFECTS: `AtomicUpdater.run`.
+- CONFIDENCE: high.
+
+**DECISION:** "Canary" = extended observation window with caller-supplied probe (no traffic split)
+
+- REASONING: Hipp0 is local-first single-process; there's no traffic to split. The operator value of "canary" is "watch for X minutes after upgrading before committing" — that's what `CanaryUpdater` does.
+- AFFECTS: `canary.ts`.
+- CONFIDENCE: medium.
+
+### Phase 4d — Generalized circuit breakers + predictive detection
+
+**DECISION:** `CircuitBreaker` is re-used verbatim from `@openhipp0/core/llm` — not re-implemented
+
+- REASONING: Per Phase 4 directive. Watchdog adds `BreakerRegistry` (named collection + transition events) on top; the core breaker class is just re-exported for ergonomic construction.
+- AFFECTS: Adds `@openhipp0/core` workspace dep on watchdog (matches the package boundary matrix).
+- CONFIDENCE: high.
+
+**DECISION:** Predictors use `lastEmitAt: number | null` for throttling instead of `0`
+
+- REASONING: Tests run with synthetic clocks at `now=0`; `0 - 0 < windowMs` would self-throttle the very first emit. Explicit `null` initial state avoids the trap.
+- AFFECTS: `OomTrendPredictor`, `ErrorSpikeDetector`, and `AutoPatchRegistry` (uses `Map.has` instead of `?? 0`).
+- CONFIDENCE: high.
+
+**DECISION:** OOM prediction uses ordinary least squares on `(takenAt, fraction)` over a sliding window
+
+- REASONING: Memory growth in steady-state agent loops is approximately linear; OLS is cheap, deterministic, and reasonable for the 30-minute horizon spec. False positives self-correct on the next sample (slope drops back below positive) without spam thanks to the throttle.
+- ALTERNATIVES_REJECTED: Exponential smoothing — adds tunable params without clearly better behaviour at this horizon.
+- AFFECTS: `predictor/oom-trend.ts`.
+- CONFIDENCE: medium. Revisit when we have real heap-trajectory data.
+
+**DECISION:** AutoPatch runs all matching patches in registration order, sequentially
+
+- REASONING: Patches may have side-effects that other patches depend on (or conflict with). Sequential + insertion-order is the most predictable ordering. Per-patch cooldown prevents tight loops.
+- AFFECTS: `predictor/auto-patch.ts`.
+- CONFIDENCE: medium.
+
+### Phase 4e — Wiring + integration
+
+**DECISION:** No new "central watchdog event bus" module; the existing `Watchdog` already serves that role for 4a primitives, and `HealthDaemon` / `BreakerRegistry` / predictors each carry their own EventEmitter
+
+- REASONING: Forcing one shared bus would create awkward namespacing for events across very different domains. Consumers compose via direct subscription; the integration test shows the shape.
+- AFFECTS: No file added. Documented here so the next contributor doesn't reach for one.
+- CONFIDENCE: medium.
+
 ---
 
 ## Coding Standards
