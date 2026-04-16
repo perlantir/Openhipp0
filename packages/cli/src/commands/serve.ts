@@ -29,6 +29,7 @@ import { buildWidgetsRoutes } from './widgets-routes.js';
 import { buildApiAuth, type ApiKeyResolver, type AuthMiddleware } from './api-auth.js';
 import { buildRlsMiddleware, chainMiddleware, type RlsDb } from './rls-middleware.js';
 import { buildPairingRoutes } from './pairing-routes.js';
+import { buildAgentMessageHandler, type AgentMessageHandler } from './build-agent.js';
 
 export interface ServeOptions {
   port?: number;
@@ -196,9 +197,18 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
         // anonymous-by-env only (defaults off for safety).
         ...(!apiToken && { allowAnonymous: allowAnonymousWs }),
       });
-      const handler =
+      // Handler resolution order (first wins):
+      //   1. opts.onMessage (explicit programmatic caller)
+      //   2. HIPP0_AGENT_MODULE dynamic import (external plug-in)
+      //   3. AgentRuntime auto-wired from env LLM keys (when present)
+      //   4. echo responder (dev fallback)
+      const handler:
+        | AgentMessageHandler
+        | NonNullable<ServeOptions['onMessage']>
+        | ((m: IncomingMessage) => OutgoingMessage) =
         opts.onMessage ??
         (await loadAgentModule(process.env['HIPP0_AGENT_MODULE'])) ??
+        (await maybeBuildAgent()) ??
         echoResponder;
       webBridge.onMessage(async (msg) => {
         const reply = await handler(msg);
@@ -357,6 +367,35 @@ function echoResponder(msg: IncomingMessage): OutgoingMessage {
       ? `(echo) ${msg.text}`
       : '🦛 Open Hipp0 received your message — wire up a Gateway in production to route through AgentRuntime.',
   };
+}
+
+/**
+ * If an LLM provider env key is present + the API DB is available, build
+ * an AgentRuntime-backed handler. Returns undefined when unavailable so
+ * the caller falls through to the echo responder.
+ */
+async function maybeBuildAgent(): Promise<AgentMessageHandler | undefined> {
+  // Only auto-wire when a provider key is present — otherwise the handler
+  // construction returns undefined anyway and we save an fs open.
+  if (!process.env['ANTHROPIC_API_KEY'] && !process.env['OPENAI_API_KEY']) {
+    return undefined;
+  }
+  try {
+    // The memory module's Drizzle client is available; re-acquire it the
+    // same way buildApiRoutes does so we share the underlying SQLite.
+    const memory = await import('@openhipp0/memory');
+    const client = memory.db.createClient(
+      process.env['HIPP0_DATABASE_URL']
+        ? { databaseUrl: process.env['HIPP0_DATABASE_URL'] }
+        : undefined,
+    );
+    return await buildAgentMessageHandler({ db: client });
+  } catch (err) {
+    process.stderr.write(
+      `agent auto-wiring failed: ${err instanceof Error ? err.message : String(err)} — falling back to echo.\n`,
+    );
+    return undefined;
+  }
 }
 
 /**
