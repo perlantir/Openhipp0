@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveConflict, strategyForKind } from "../src/sync/conflict-resolver.js";
+import { resolveConflict, strategyForKind } from "../src/sync/sync-manager.js";
 
 const base = { id: "x", updatedAt: "2026-04-16T00:00:00Z" } as const;
 

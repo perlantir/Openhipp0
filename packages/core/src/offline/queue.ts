@@ -103,15 +103,18 @@ export class OutboundActionQueue {
    */
   async drain(
     handler: ActionHandler,
-    opts: { maxAttempts?: number } = {},
-  ): Promise<{ processed: number; dropped: number }> {
+    opts: { maxAttempts?: number; stopOnFirstFailure?: boolean } = {},
+  ): Promise<{ processed: number; failed: number; dropped: number }> {
     const maxAttempts = opts.maxAttempts ?? 5;
+    const stopOnFirstFailure = opts.stopOnFirstFailure ?? false;
     let processed = 0;
+    let failed = 0;
     let dropped = 0;
     const snapshot = [...this.actions];
     for (const action of snapshot) {
       if (this.inFlight >= this.concurrency) break;
       this.inFlight += 1;
+      let thisCallFailed = false;
       try {
         await handler(action);
         this.actions = this.actions.filter((a) => a.id !== action.id);
@@ -119,6 +122,8 @@ export class OutboundActionQueue {
       } catch (err) {
         action.attempts += 1;
         action.lastError = err instanceof Error ? err.message : String(err);
+        failed += 1;
+        thisCallFailed = true;
         if (action.attempts >= maxAttempts) {
           this.actions = this.actions.filter((a) => a.id !== action.id);
           dropped += 1;
@@ -126,9 +131,10 @@ export class OutboundActionQueue {
       } finally {
         this.inFlight -= 1;
       }
+      if (thisCallFailed && stopOnFirstFailure) break;
     }
     await this.save();
-    return { processed, dropped };
+    return { processed, failed, dropped };
   }
 
   clear(): void {

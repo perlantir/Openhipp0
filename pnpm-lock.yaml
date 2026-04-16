@@ -254,6 +254,9 @@ importers:
 
   packages/mobile:
     dependencies:
+      '@openhipp0/core':
+        specifier: workspace:*
+        version: link:../core
       '@openhipp0/sdk':
         specifier: workspace:*
         version: link:../sdk
