@@ -50,3 +50,14 @@ export {
   type SessionToCompress,
   type Turn,
 } from './compress-session.js';
+
+export {
+  DEFAULT_HALF_LIFE_DAYS,
+  MIN_RECENCY_FLOOR,
+  computeSkillRank,
+  listSkillsForRecall,
+  promoteSkillToProject,
+  type RankOptions,
+  type RankedSkill,
+  type ListSkillsForRecallOptions,
+} from './skills-rank.js';
