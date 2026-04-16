@@ -5,10 +5,20 @@ import tailwindcss from '@tailwindcss/vite';
 // Vite config for @openhipp0/dashboard — the React 19 + Tailwind v4 web UI.
 // Output lands in dist/; served by the bridge Gateway's static handler or by
 // `vite preview` for local dev.
+// Dev-mode target for /ws + /health proxying. Override with HIPP0_SERVE_URL
+// (e.g. HIPP0_SERVE_URL=http://127.0.0.1:3150 pnpm --filter dashboard dev).
+const hipp0Target = process.env['HIPP0_SERVE_URL'] ?? 'http://127.0.0.1:3100';
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     outDir: 'dist',
     sourcemap: true,
+  },
+  server: {
+    proxy: {
+      '/ws': { target: hipp0Target, ws: true, changeOrigin: true },
+      '/health': { target: hipp0Target, changeOrigin: true },
+    },
   },
 });

@@ -24,16 +24,17 @@
     "clean": "rm -rf dist .turbo coverage"
   },
   "dependencies": {
+    "@openhipp0/bridge": "workspace:*",
+    "@openhipp0/cli": "workspace:*",
     "@openhipp0/core": "workspace:*",
     "@openhipp0/memory": "workspace:*",
-    "@openhipp0/bridge": "workspace:*",
     "@openhipp0/scheduler": "workspace:*",
     "@openhipp0/watchdog": "workspace:*",
-    "@openhipp0/cli": "workspace:*",
     "ws": "^8.18.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/ws": "^8.5.13"
   }
 }

@@ -67,6 +67,13 @@ export class Hipp0HttpServer {
     return { host: this.host, port: this.port };
   }
 
+  /** Expose the underlying HTTP server so WebBridge (or any other WS
+   *  upgrade handler) can share the port. Returns undefined when the
+   *  server hasn't been started yet. */
+  getHttpServer(): HttpServer | undefined {
+    return this.server;
+  }
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url ?? '/';
     const method = req.method ?? 'GET';
