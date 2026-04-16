@@ -11,3 +11,5 @@ export const version = '0.0.0' as const;
 export * from './types.js';
 export { ReconnectSupervisor, type ReconnectConfig, type ReconnectState } from './reconnect.js';
 export { OutboundQueue, type OutboundQueueConfig, type QueuedOutbound } from './queue.js';
+export { CliBridge, type CliBridgeOptions } from './cli.js';
+export { WebBridge, type WebBridgeOptions, type WebAuthenticator } from './web.js';
