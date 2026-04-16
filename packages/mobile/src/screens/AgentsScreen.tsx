@@ -2,7 +2,8 @@
 // Lists agents from GET /api/config/agents. List-row pattern from the
 // design skill: 52dp min-height, border-bottom between rows.
 
-import { ActivityIndicator, FlatList, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { TypedFlatList } from "../components/TypedFlatList.js";
 import { useTheme } from "../theme/useTheme.js";
 import { useAgents } from "../api/hooks.js";
 import type { AgentSummary } from "../api/client.js";
@@ -44,7 +45,7 @@ export function AgentsScreen() {
   return (
     <View style={{ flex: 1 }}>
       <ScreenHeader title="Agents" subtitle={`${data.length} configured`} />
-      <FlatList<AgentSummary>
+      <TypedFlatList<AgentSummary>
         data={data as AgentSummary[]}
         keyExtractor={(a) => a.id}
         renderItem={({ item }) => (

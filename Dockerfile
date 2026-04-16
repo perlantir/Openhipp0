@@ -18,16 +18,17 @@ WORKDIR /app
 
 # Copy workspace manifest + lockfile first for better layer caching.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY scripts ./scripts
 COPY packages ./packages
 
 # pnpm uses the lockfile to install workspace deps deterministically.
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
-# The mobile + relay packages aren't part of the server image: mobile ships
-# via EAS, relay has its own Dockerfile. Exclude them from the multi-package
-# build so this image doesn't need react-native / expo native toolchains.
-RUN pnpm exec turbo run build --filter='!@openhipp0/mobile' --filter='!@openhipp0/relay'
+# Filter list lives in scripts/turbo-server-filter.sh so Dockerfile +
+# CI + local ops scripts all stay in lock-step. Mobile ships via EAS;
+# relay has its own Dockerfile at packages/relay/.
+RUN pnpm exec turbo run build $(bash scripts/turbo-server-filter.sh)
 
 
 # ── Runtime deps only ──────────────────────────────────────────────────────

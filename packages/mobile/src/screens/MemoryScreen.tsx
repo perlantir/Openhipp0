@@ -1,7 +1,8 @@
 // packages/mobile/src/screens/MemoryScreen.tsx
 // Memory overview: stats cards + recent decisions list.
 
-import { ActivityIndicator, FlatList, Text, View, type ListRenderItemInfo } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
+import { TypedFlatList } from "../components/TypedFlatList.js";
 import { useTheme } from "../theme/useTheme.js";
 import { useDecisions, useMemoryStats } from "../api/hooks.js";
 import type { DecisionSummary, MemoryStats } from "../api/client.js";
@@ -83,10 +84,10 @@ export function MemoryScreen() {
       >
         Recent decisions
       </Text>
-      <FlatList<DecisionSummary>
+      <TypedFlatList<DecisionSummary>
         data={decisions as DecisionSummary[]}
         keyExtractor={(d) => d.id}
-        renderItem={({ item }: ListRenderItemInfo<DecisionSummary>) => (
+        renderItem={({ item }) => (
           <View
             style={{
               paddingHorizontal: t.spacing.lg,
