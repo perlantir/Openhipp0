@@ -13,3 +13,6 @@ export { ReconnectSupervisor, type ReconnectConfig, type ReconnectState } from '
 export { OutboundQueue, type OutboundQueueConfig, type QueuedOutbound } from './queue.js';
 export { CliBridge, type CliBridgeOptions } from './cli.js';
 export { WebBridge, type WebBridgeOptions, type WebAuthenticator } from './web.js';
+export { DiscordBridge, type DiscordBridgeOptions } from './discord.js';
+export { TelegramBridge, type TelegramBridgeOptions } from './telegram.js';
+export { SlackBridge, type SlackBridgeOptions } from './slack.js';
