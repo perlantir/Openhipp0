@@ -240,10 +240,11 @@ new features that depend on them.
 ### 🟡 Medium priority
 
 1. **Dashboard pages 3–10 are shells.** Interactive now: Home + Chat +
-   **Memory** (`/api/memory/stats`) + **Skills** (`/api/skills`). Still
-   shells: Agents / Scheduler / Health / Costs / Audit / Settings — each
-   needs a matching REST endpoint plus ~100 lines of fetch + render per
-   page following the pattern in `src/pages/Memory.tsx` or `Skills.tsx`.
+   **Memory** (`/api/memory/stats`) + **Skills** (`/api/skills`) +
+   **Scheduler** (`/api/config/cron`) + **Agents** (`/api/config/agents`).
+   Still shells: Health / Costs / Audit / Settings — each needs a matching
+   REST endpoint plus ~100 lines of fetch + render per page following the
+   pattern in `src/pages/Memory.tsx`.
 2. ~~**REST API surface is GET /health only.**~~ **RESOLVED.**
    `hipp0 serve --with-api` mounts `/api/decisions` (POST/GET/GET-by-id/
    PATCH), `/api/memory/search`, `/api/memory/stats`. Optional bearer

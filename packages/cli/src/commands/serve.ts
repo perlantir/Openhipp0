@@ -50,7 +50,8 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
       databaseUrl: opts.databaseUrl ?? process.env['HIPP0_DATABASE_URL'],
       apiToken: opts.apiToken ?? process.env['HIPP0_API_TOKEN'],
     });
-    routeTable = built.routes;
+    const configRoutes = buildConfigRoutes(opts.apiToken ?? process.env['HIPP0_API_TOKEN']);
+    routeTable = [...built.routes, ...configRoutes];
     closeDb = built.close;
   }
 
@@ -111,6 +112,70 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
     process.once('SIGTERM', shutdown);
   });
   return { exitCode: 0, stdout: [banner, 'stopped'] };
+}
+
+/**
+ * Read-only view of ~/.hipp0/config.json exposed at /api/config,
+ * /api/config/agents, /api/config/cron. The dashboard reads these so the
+ * Scheduler / Agents / Settings pages have something to render. We sanitize
+ * by dropping anything under `llm.apiKey`-like fields even though the
+ * current config schema doesn't store them (future-proofing).
+ */
+function buildConfigRoutes(apiToken: string | undefined): readonly Route[] {
+  const wrap = (handler: Route['handler']): Route['handler'] =>
+    apiToken
+      ? async (ctx) => {
+          const raw = (ctx.req as { headers?: Record<string, string | undefined> }).headers?.['authorization'];
+          if (raw !== `Bearer ${apiToken}`) {
+            return { status: 401, body: { error: 'unauthorized' } };
+          }
+          return handler(ctx);
+        }
+      : handler;
+
+  const loadConfig = async (): Promise<Record<string, unknown>> => {
+    const { readConfig } = await import('../config.js');
+    const cfg = (await readConfig()) as unknown as Record<string, unknown>;
+    // Defensive redact — only fields we know are safe ship out.
+    return sanitizeConfig(cfg);
+  };
+
+  return [
+    {
+      method: 'GET',
+      path: '/api/config',
+      handler: wrap(async () => ({ body: await loadConfig() })),
+    },
+    {
+      method: 'GET',
+      path: '/api/config/agents',
+      handler: wrap(async () => {
+        const cfg = await loadConfig();
+        return { body: cfg['agents'] ?? [] };
+      }),
+    },
+    {
+      method: 'GET',
+      path: '/api/config/cron',
+      handler: wrap(async () => {
+        const cfg = await loadConfig();
+        return { body: cfg['cronTasks'] ?? [] };
+      }),
+    },
+  ];
+}
+
+function sanitizeConfig(cfg: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(cfg)) {
+    if (/key|secret|token|password/i.test(k)) continue;
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = sanitizeConfig(v as Record<string, unknown>);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }
 
 async function buildApiRoutes(opts: {

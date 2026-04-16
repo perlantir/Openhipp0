@@ -36,6 +36,10 @@ Callers can register extra routes via `new Hipp0HttpServer({ routes: { 'GET /ver
 | PATCH  | `/api/decisions/:id`         | 200/404| `{ title?, reasoning?, confidence?, tags?, status? }` |
 | GET    | `/api/memory/search`         | 200/400| `?projectId=… &q=… &agentId? &userId? &limit=10` |
 | GET    | `/api/memory/stats`          | 200    | — |
+| GET    | `/api/skills`                | 200    | `?projectId? &agentId? &limit=50` |
+| GET    | `/api/config`                | 200    | sanitized read-only view of ~/.hipp0/config.json |
+| GET    | `/api/config/agents`         | 200    | `config.agents[]` |
+| GET    | `/api/config/cron`           | 200    | `config.cronTasks[]` |
 
 ### Auth
 
