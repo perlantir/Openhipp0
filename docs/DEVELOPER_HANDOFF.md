@@ -1,9 +1,12 @@
 # Developer Handoff — Open Hipp0
 
-> **Status as of 2026-04-16:** Phases 1–18 feature-complete. 943 vitest tests
-> + 6 Playwright e2e checks + 23 Python SDK tests. Clean lint, clean TypeScript
-> build, clean docker-compose build. Read this document + `CLAUDE.md` at the
-> repo root before touching anything.
+> **Status as of 2026-04-16 (post-Phase-18 + gap-closing pass):** Phases 1–18
+> feature-complete. **977 vitest tests** + 6 Playwright e2e checks + 23 Python
+> SDK tests — all green. REST API mounted under `/api/*`, **8 of 10 dashboard
+> pages interactive** (Home + Chat + Memory + Skills + Scheduler + Agents +
+> Health + Settings; Costs + Audit remain shells). Clean lint, clean
+> TypeScript build, clean docker-compose build. Read this document +
+> `CLAUDE.md` at the repo root before touching anything.
 
 This is a hand-off from the implementation team to future maintainers. It
 covers the current state, architecture, conventions, known gaps, and the
@@ -49,7 +52,9 @@ open-hipp0/
 │   │       ├── enterprise/        # Phase 14 — RLS / SSO / org / audit / API keys
 │   │       └── training/          # Phase 15 — trajectory export + batch runner
 │   ├── memory/                    # Decision graph, user model, recall, connectors
-│   │   └── src/connectors/        # Phase 16 Notion/Linear/Slack/GH-PR/Confluence
+│   │   └── src/
+│   │       ├── connectors/        # Phase 16 Notion/Linear/Slack/GH-PR/Confluence
+│   │       └── api/               # REST route factory (Phase 19 — Python SDK contract)
 │   ├── bridge/                    # Messaging: Discord/Telegram/Slack/Web/CLI
 │   │   └── src/                   # + Phase 13 Signal/Matrix/Mattermost/Email/SMS/
 │   │                              #   WhatsApp-Business/Home-Assistant
@@ -89,22 +94,31 @@ pnpm install                       # installs every workspace + node_modules/
 
 # 2. Validate your checkout
 pnpm -r build                      # 0 errors across 10 packages
-pnpm -r test                       # 943 tests passing
+pnpm -r test                       # 977 tests passing
 pnpm -r lint                       # 0 warnings / 0 errors
 bash scripts/test-python.sh        # 23 Python tests passing
 
 # 3. Start the HTTP server (binds :3100)
 node packages/cli/bin/hipp0.js serve
-#   or, with the WebSocket chat endpoint attached:
-HIPP0_WITH_WS=1 node packages/cli/bin/hipp0.js serve
+#   Useful opt-ins (flags or env vars):
+HIPP0_WITH_WS=1  node packages/cli/bin/hipp0.js serve   # /ws chat endpoint
+HIPP0_WITH_API=1 node packages/cli/bin/hipp0.js serve   # /api/* REST surface
+HIPP0_WITH_WS=1 HIPP0_WITH_API=1 HIPP0_API_TOKEN=secret \
+  node packages/cli/bin/hipp0.js serve                   # full feature set + auth
+#   Same thing via CLI flags:
+node packages/cli/bin/hipp0.js serve --with-ws --with-api --api-token secret
 
 # 4. Start the dashboard dev server (defaults to http://localhost:5173)
 pnpm --filter @openhipp0/dashboard dev
-#   Dashboard proxies /ws + /health to http://127.0.0.1:3100 by default —
-#   override with HIPP0_SERVE_URL.
+#   Dashboard proxies /ws + /api/* to http://127.0.0.1:3100 by default
+#   (override via HIPP0_SERVE_URL). /health is intentionally NOT proxied —
+#   there's a React Router /health route with the same name; the dashboard
+#   fetches /api/health instead.
 
 # 5. Smoke-test
-curl http://localhost:3100/health  # { status: "ok", uptime: <s>, … }
+curl http://localhost:3100/health        # Docker healthcheck endpoint
+curl http://localhost:3100/api/memory/stats    # (needs --with-api)
+curl http://localhost:3100/api/config          # sanitized config view
 
 # 6. (Optional) Run the Playwright sweep
 cd packages/e2e
@@ -188,6 +202,7 @@ pnpm exec playwright test          # 6 phase-sweep checks, headless chromium
 | 16 | Connectors | Notion/Linear/Slack/GitHub-PR/Confluence — dedup on (url, hash). |
 | 17 | 15 more integrations + e2e + docs | Outlook/Apple-Cal/GCal/Notion/Obsidian/Trello/Drive/Dropbox/Jira/HA/Hue/Spotify/Twilio/Mattermost/Todoist. |
 | 18 | Install + onboarding | scripts/install.sh, cloud-init, homebrew, `hipp0 update` with auto-rollback. |
+| 18.5 (post-18 cleanup) | REST API + interactive dashboard + plug-in /ws | `hipp0 serve --with-api` mounts `/api/decisions/*`, `/api/memory/{search,stats}`, `/api/skills`, `/api/config/{agents,cron}`, `/api/health`. Dashboard pages Memory/Skills/Scheduler/Agents/Health/Settings all now fetch real data. `HIPP0_AGENT_MODULE` plug-in replaces the /ws echo responder. Vite dev proxy routes `/ws` + `/api/*` (not `/health` — shadows React route). |
 
 ---
 
@@ -206,7 +221,7 @@ HIPP0_DATABASE_URL     file:/path.db or sqlite: prefix — where the REST API st
 HIPP0_AGENT_MODULE     ES-module specifier whose default export replaces the /ws echo handler
 HIPP0_DEFAULT_MODEL    Seed default LLM model for init wizard
 HIPP0_VERSION          Pin CLI version in install.sh
-HIPP0_SERVE_URL        Dashboard dev-mode /ws + /health proxy target
+HIPP0_SERVE_URL        Dashboard dev-mode /ws + /api/* proxy target (default http://127.0.0.1:3100)
 SKIP_ONBOARD           install.sh — skip interactive wizard
 INSTALL_DAEMON         install.sh — install systemd/launchd service
 NONINTERACTIVE         install.sh — forces non-interactive mode
@@ -373,6 +388,18 @@ story simple.
   DB from a crashed previous run is still bound. Run `pnpm --filter
   @openhipp0/memory test` in isolation or add
   `testIsolation: 'strict'` in vitest.config.
+- **Dashboard shows "Unexpected token '<', '<!doctype '..."**: the REST
+  API isn't running — start with `--with-api`. The page fell through
+  the vite proxy and hit the SPA HTML fallback because `/api/*` wasn't
+  reachable upstream.
+- **Dashboard `/health` page shows raw JSON:** you added `/health` back
+  to the vite proxy. Don't — the React Router route of the same name
+  gets shadowed. Use `/api/health` (aliased server-side) instead.
+- **`HIPP0_DATABASE_URL=/tmp/x.db` fails:** needs a scheme. Use
+  `file:/tmp/x.db` or `sqlite:/tmp/x.db`.
+- **`HIPP0_AGENT_MODULE` silently falls back to echo:** check stderr —
+  the loader prints the failure reason before degrading. Module must
+  export either `default` or `onMessage` as a function.
 
 ---
 
@@ -382,8 +409,8 @@ story simple.
   whenever you're tempted to make a non-trivial architecture call.
 - `docs/architecture.md` — system diagram + dataflow.
 - `docs/cli.md` — every CLI command + option.
-- `docs/api-reference.md` — the contract the Python SDK targets (not
-  yet implemented, but documented).
+- `docs/api-reference.md` — the live REST API contract for the Python
+  SDK. Implemented; mounts under `/api/*` when `hipp0 serve --with-api`.
 - `docs/security.md` — threat model + mitigations.
 - `docs/self-hosting.md` — production deployment playbook.
 - `docs/enterprise.md` — RLS / SSO / org model / audit / API keys.
@@ -412,7 +439,7 @@ Before marking any change "done", make sure all of the following pass:
 pnpm -r build                      # 0 errors
 pnpm -r typecheck                  # 0 errors
 pnpm -r lint                       # 0 warnings / 0 errors
-pnpm -r test                       # 0 failures, 943+ tests
+pnpm -r test                       # 0 failures, 977+ tests
 bash scripts/test-python.sh        # 23+ Python tests
 cd packages/e2e && pnpm exec playwright test   # 6+ sweep checks
 docker compose -f deployment/docker-compose.prod.yml build   # image builds clean
