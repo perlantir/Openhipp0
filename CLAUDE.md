@@ -858,6 +858,48 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 23 — Skills marketplace (`core/skills/marketplace`)
+
+**DECISION:** Skill bundles are JSON envelopes, not tarballs
+
+- REASONING: A JSON bundle (manifest + SKILL.md + optional tools.ts source) with a canonical-ordering SHA-256 `contentHash` keeps the install path dependency-free (no tar, no gzip, no streaming ops), byte-by-byte auditable before the install writes to disk, and integrity-checkable without extra tooling. Skills are small — an entire bundle fits comfortably in a single JSON payload.
+- ALTERNATIVES_REJECTED: OCI artifacts (over-engineered for our scale), npm tarballs (inherits npm semantics we don't want).
+- AFFECTS: `packages/core/src/skills/marketplace/types.ts` SkillBundle.
+- CONFIDENCE: high.
+
+**DECISION:** `contentHash` is computed over a canonical serialization (`{manifest, skillMd, toolsSource}`) and verified at install time
+
+- REASONING: Forces every install to come through a content-addressed path. A malicious index that ships a fake bundle has to match the published hash or the installer refuses. Pairs with the pin + rollback features: `previousContentHash` on the ledger lets rollback verify the exact bytes before restoring.
+- AFFECTS: `installer.assertHashMatches`, `computeBundleHash`.
+- CONFIDENCE: high.
+
+**DECISION:** Installer takes a structural `InstallerFs` interface, not `node:fs` directly
+
+- REASONING: Matches the Phase-7a CLI pattern. In-memory fakes give deterministic unit tests; production passes the `defaultInstallerFs` wrapper around `node:fs/promises`. The structural surface is tight (read/write/mkdir/rm/rename/stat) so alternative backends (e.g. encrypted storage, content-addressable blob store) plug in without touching the install logic.
+- AFFECTS: `InstallerFs`.
+- CONFIDENCE: high.
+
+**DECISION:** Pin/unpin/rollback track state in a single `installed.json` ledger per root, not per-skill files
+
+- REASONING: Atomic read-modify-write on one file is simpler + harder to leave in an inconsistent state than a file-per-skill layout. The file is small (a few KB even with hundreds of skills). Ledger is human-readable so operators can inspect / diff / back up via `git`.
+- AFFECTS: `packages/core/src/skills/marketplace/installer.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Rollback requires the caller to supply the previous bundle
+
+- REASONING: The installer deliberately doesn't cache bundle bytes — a `~/.hipp0/skills/.trash/` accumulates unused state and becomes a backup-restore hazard. The CLI refetches the previous bundle by version from the marketplace and passes it in; the installer verifies the `contentHash` matches the recorded `previousContentHash` before restoring.
+- ALTERNATIVES_REJECTED: Cache previous versions locally — quiet storage growth + matches the "source of truth is the marketplace" model we want.
+- AFFECTS: `installer.rollback`, CLI `runMarketplaceRollback`.
+- CONFIDENCE: medium.
+
+**DECISION:** Static-analysis malicious-pattern scanner + signed-publisher PKI + revenue-sharing + auto-sharing explicitly **cut** from v1
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. Static analysis is security theater (attackers route around regex); signed publisher needs real PKI infrastructure (sigstore/cosign, v2); revenue/billing isn't technical; auto-sharing is a privacy minefield. The runtime defenses (Phase 1f sandbox + Phase 5.2 policy engine) are the real safety layer — the marketplace treats every installed skill as untrusted code.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
 ### Phase 22 — Cost optimization
 
 **DECISION:** Ship L1 (exact cache), L4 (model router), L6 (prompt cache hooks), L7 (batch adapter) in v1; defer L2 (semantic cache) + L3 (plan cache) + L5 (LLMLingua)
