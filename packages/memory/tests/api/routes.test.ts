@@ -144,6 +144,32 @@ describe('createApiRoutes', () => {
     expect((await call(search, { query: { projectId: 'p' } })).status).toBe(400);
   });
 
+  it('GET /api/skills returns rows filtered by projectId', async () => {
+    await seedProject(db, 'p1');
+    await seedProject(db, 'p2');
+    // Seed two skills via raw SQL (no createSkill helper publicly exported).
+    const client = db.$client;
+    client
+      .prepare(
+        `INSERT INTO skills (id, project_id, agent_id, title, content_md, times_used, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('s1', 'p1', 'agent-x', 'Resolve merge conflicts', '# Skill', 5, new Date().toISOString(), new Date().toISOString());
+    client
+      .prepare(
+        `INSERT INTO skills (id, project_id, agent_id, title, content_md, times_used, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run('s2', 'p2', 'agent-y', 'Other', '# Skill', 1, new Date().toISOString(), new Date().toISOString());
+
+    const routes = createApiRoutes({ db });
+    const list = findRoute(routes, 'GET', '/api/skills');
+    const r = await call(list, { query: { projectId: 'p1' } });
+    const rows = r.body as Array<{ id: string; title: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe('s1');
+  });
+
   it('requireBearer=true enforces auth on every route', async () => {
     const routes = createApiRoutes({ db, requireBearer: 's3cret' });
     const stats = findRoute(routes, 'GET', '/api/memory/stats');

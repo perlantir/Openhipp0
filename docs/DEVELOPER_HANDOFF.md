@@ -203,6 +203,7 @@ HIPP0_WITH_WS          When set (1/true/yes/on), hipp0 serve attaches a WebBridg
 HIPP0_WITH_API         When set, hipp0 serve mounts the REST API under /api/*
 HIPP0_API_TOKEN        Bearer token required on every /api/* request (optional)
 HIPP0_DATABASE_URL     file:/path.db or sqlite: prefix — where the REST API stores data
+HIPP0_AGENT_MODULE     ES-module specifier whose default export replaces the /ws echo handler
 HIPP0_DEFAULT_MODEL    Seed default LLM model for init wizard
 HIPP0_VERSION          Pin CLI version in install.sh
 HIPP0_SERVE_URL        Dashboard dev-mode /ws + /health proxy target
@@ -238,21 +239,23 @@ new features that depend on them.
 
 ### 🟡 Medium priority
 
-1. **Dashboard pages 3–10 are shells.** As of the post-Phase-18 cleanup,
-   Home + Chat + **Memory** are now interactive (Memory talks to
-   `/api/memory/stats`). Agents / Skills / Scheduler / Health / Costs /
-   Audit / Settings still print CLI-hint placeholders — now that the REST
-   API surface exists, wiring each one is a ~100-line change per page.
+1. **Dashboard pages 3–10 are shells.** Interactive now: Home + Chat +
+   **Memory** (`/api/memory/stats`) + **Skills** (`/api/skills`). Still
+   shells: Agents / Scheduler / Health / Costs / Audit / Settings — each
+   needs a matching REST endpoint plus ~100 lines of fetch + render per
+   page following the pattern in `src/pages/Memory.tsx` or `Skills.tsx`.
 2. ~~**REST API surface is GET /health only.**~~ **RESOLVED.**
    `hipp0 serve --with-api` mounts `/api/decisions` (POST/GET/GET-by-id/
    PATCH), `/api/memory/search`, `/api/memory/stats`. Optional bearer
    auth via `--api-token` / `HIPP0_API_TOKEN`. Python SDK contract is
    live. See `docs/api-reference.md`.
-3. **Echo responder on `/ws` is a placeholder.** Wiring a real
-   AgentRuntime-backed Gateway (so the dashboard chat actually runs the
-   agent) is the next natural step. `hipp0 serve --with-ws` makes the
-   plumbing available; the caller has to pass `onMessage` that routes
-   through `Gateway + AgentRuntime + LLMClient`.
+3. **Echo responder on `/ws` is mostly a placeholder — now swappable.**
+   Set `HIPP0_AGENT_MODULE` to an ES-module specifier; `hipp0 serve
+   --with-ws` dynamic-imports it and uses its `default` / `onMessage`
+   export as the chat handler. A proper AgentRuntime-backed Gateway
+   still has to be written by operators (LLM provider config is too
+   deployment-specific to ship generically), but the plug-in point is
+   now documented + lint-clean + falls back to echo on failure.
 4. **15 Phase-17 integrations ship in a single bundled file**
    (`packages/core/src/integrations/phase17.ts`). They work and they're
    tested, but splitting them into per-integration subdirs (matching

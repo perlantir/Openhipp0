@@ -7,6 +7,7 @@
  *   PATCH  /api/decisions/:id          update
  *   GET    /api/memory/search          FTS5 search
  *   GET    /api/memory/stats           row counts
+ *   GET    /api/skills                 list skills (optionally filtered by project/agent)
  *
  * Returns a Route[] that plugs directly into Hipp0HttpServer.routeTable.
  * The handler contract is the structural shape used by the bridge package
@@ -15,6 +16,7 @@
  */
 
 import { z } from 'zod';
+import { and, desc, eq } from 'drizzle-orm';
 import type { HipppoDb } from '../db/index.js';
 import {
   createDecision,
@@ -24,6 +26,7 @@ import {
   type DecisionStatus,
 } from '../decisions/index.js';
 import { searchSessions, escapeFts5 } from '../recall/index.js';
+import { skills as skillsTable } from '../db/schema.js';
 
 // ─── route shape (structural; matches @openhipp0/bridge.Route) ───────────
 
@@ -176,6 +179,35 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
             userModels: count('SELECT COUNT(*) AS c FROM user_models'),
           },
         };
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/skills',
+      async handler(ctx) {
+        const projectId = ctx.query['projectId'];
+        const agentId = ctx.query['agentId'];
+        const limit = parseInt(ctx.query['limit'] ?? '50', 10);
+        const conditions = [];
+        if (projectId) conditions.push(eq(skillsTable.projectId, projectId));
+        if (agentId) conditions.push(eq(skillsTable.agentId, agentId));
+        const where = conditions.length > 0 ? (conditions.length === 1 ? conditions[0] : and(...conditions)) : undefined;
+        const query = opts.db
+          .select({
+            id: skillsTable.id,
+            title: skillsTable.title,
+            projectId: skillsTable.projectId,
+            agentId: skillsTable.agentId,
+            triggerPattern: skillsTable.triggerPattern,
+            timesUsed: skillsTable.timesUsed,
+            timesImproved: skillsTable.timesImproved,
+            createdAt: skillsTable.createdAt,
+          })
+          .from(skillsTable)
+          .orderBy(desc(skillsTable.timesUsed))
+          .limit(isFinite(limit) ? Math.min(limit, 500) : 50);
+        const rows = await (where ? query.where(where) : query);
+        return { body: rows };
       },
     },
   ];

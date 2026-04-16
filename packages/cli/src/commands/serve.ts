@@ -79,7 +79,10 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
     const http = server.getHttpServer();
     if (http) {
       webBridge = new WebBridge({ httpServer: http, path: '/ws', attachOnly: true });
-      const handler = opts.onMessage ?? echoResponder;
+      const handler =
+        opts.onMessage ??
+        (await loadAgentModule(process.env['HIPP0_AGENT_MODULE'])) ??
+        echoResponder;
       webBridge.onMessage(async (msg) => {
         const reply = await handler(msg);
         if (reply) await webBridge!.send(msg.channel.id, reply);
@@ -142,4 +145,41 @@ function echoResponder(msg: IncomingMessage): OutgoingMessage {
       ? `(echo) ${msg.text}`
       : '🦛 Open Hipp0 received your message — wire up a Gateway in production to route through AgentRuntime.',
   };
+}
+
+/**
+ * Optional agent plug-in: if `HIPP0_AGENT_MODULE` names an ES module, we
+ * dynamic-import it and use its default export (or named `onMessage`) as
+ * the chat handler. Absolute paths and package specifiers both work.
+ *
+ * Module contract:
+ *   export default (msg: IncomingMessage) => Promise<OutgoingMessage|undefined>;
+ *   // OR
+ *   export function onMessage(msg: IncomingMessage): Promise<OutgoingMessage>;
+ */
+async function loadAgentModule(
+  spec: string | undefined,
+): Promise<ServeOptions['onMessage']> {
+  if (!spec) return undefined;
+  try {
+    const mod = (await import(spec)) as {
+      default?: NonNullable<ServeOptions['onMessage']>;
+      onMessage?: NonNullable<ServeOptions['onMessage']>;
+    };
+    const handler = mod.default ?? mod.onMessage;
+    if (typeof handler !== 'function') {
+      process.stderr.write(
+        `HIPP0_AGENT_MODULE ${spec} loaded but no default export / onMessage() found; falling back to echo.\n`,
+      );
+      return undefined;
+    }
+    return handler;
+  } catch (err) {
+    process.stderr.write(
+      `HIPP0_AGENT_MODULE ${spec} failed to load: ${
+        err instanceof Error ? err.message : String(err)
+      } — falling back to echo.\n`,
+    );
+    return undefined;
+  }
 }
