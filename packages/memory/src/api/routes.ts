@@ -15,6 +15,7 @@
  * invert the package-boundary matrix: memory cannot import bridge).
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { and, desc, eq } from 'drizzle-orm';
 import type { HipppoDb } from '../db/index.js';
@@ -124,7 +125,7 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
         const id = ctx.params['id'];
         if (!id) return { status: 400, body: { error: 'missing :id' } };
         const d = await getDecision(opts.db, id);
-        if (!d) return { status: 404, body: { error: 'decision not found', id } };
+        if (!d) return { status: 404, body: { error: 'decision not found' } };
         return { body: d };
       },
     },
@@ -136,7 +137,7 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
         if (!id) return { status: 400, body: { error: 'missing :id' } };
         const patch = UpdateDecisionBody.parse(ctx.body ?? {});
         const updated = await updateDecision(opts.db, id, patch);
-        if (!updated) return { status: 404, body: { error: 'decision not found', id } };
+        if (!updated) return { status: 404, body: { error: 'decision not found' } };
         return { body: updated };
       },
     },
@@ -309,26 +310,30 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
     },
   ];
 
-  // Bearer-auth wrapper if requested.
+  // Bearer-auth wrapper if requested. Uses constant-time comparison (SHA-256
+  // digests guarantee equal-length buffers for timingSafeEqual).
   if (opts.requireBearer) {
-    const token = opts.requireBearer;
+    const tokenHashHex = createHash('sha256').update(opts.requireBearer).digest('hex');
+    const tokenHashBuf = Buffer.from(tokenHashHex, 'hex');
     return routes.map((r) => ({
       ...r,
       async handler(ctx) {
-        // Caller passes the req so we can read headers. The bridge's adapter
-        // sets `ctx.query['_authorization']` to the raw header for us, but
-        // the standard Hipp0HttpServer path doesn't; we check `opts.authorize`
-        // as an escape hatch, otherwise read the raw Authorization header
-        // off the req object when the bridge exposes it.
         const reqAny = (ctx as unknown as { req?: { headers?: Record<string, string | undefined> } }).req;
         const raw = reqAny?.headers?.['authorization'] ?? undefined;
-        const expected = `Bearer ${token}`;
         if (opts.authorize) {
           const authCtx: ApiRouteContext & { authorization?: string } = { ...ctx };
           if (raw !== undefined) authCtx.authorization = raw;
           if (!opts.authorize(authCtx)) return { status: 401, body: { error: 'unauthorized' } };
-        } else if (raw !== expected) {
-          return { status: 401, body: { error: 'unauthorized' } };
+        } else {
+          const trimmed = raw?.trim();
+          if (!trimmed || !trimmed.toLowerCase().startsWith('bearer ')) {
+            return { status: 401, body: { error: 'unauthorized' } };
+          }
+          const presented = trimmed.slice(7).trim();
+          const presentedHash = Buffer.from(createHash('sha256').update(presented).digest('hex'), 'hex');
+          if (presentedHash.length !== tokenHashBuf.length || !timingSafeEqual(presentedHash, tokenHashBuf)) {
+            return { status: 401, body: { error: 'unauthorized' } };
+          }
         }
         return r.handler(ctx);
       },

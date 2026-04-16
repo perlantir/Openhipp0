@@ -13,9 +13,11 @@
 import {
   Hipp0HttpServer,
   WebBridge,
+  createRateLimiter,
   type IncomingMessage,
   type OutgoingMessage,
   type Route,
+  type PreRouteMiddleware,
 } from '@openhipp0/bridge';
 import type { CommandResult } from '../types.js';
 import { buildVoiceRoutes } from './voice-routes.js';
@@ -46,6 +48,13 @@ export interface ServeOptions {
   onMessage?: (msg: IncomingMessage) => Promise<OutgoingMessage | undefined> | OutgoingMessage | undefined;
   /** Pre-built routeTable for tests / advanced wiring. */
   routeTable?: readonly Route[];
+  /**
+   * Per-IP rate limiter. Default: 40 burst / 20s window (≈ 120 req/min).
+   * Set to `false` to disable (dev only). `allowedOrigins` drives CORS +
+   * WS Origin allowlist; default [] = same-origin only.
+   */
+  rateLimit?: { capacity?: number; windowMs?: number } | false;
+  allowedOrigins?: readonly string[];
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> {
@@ -126,10 +135,28 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
     closeDb = built.close;
   }
 
+  const preRouteMiddlewares: PreRouteMiddleware[] = [];
+  if (opts.rateLimit !== false) {
+    preRouteMiddlewares.push(
+      createRateLimiter({
+        capacity: opts.rateLimit?.capacity ?? 40,
+        windowMs: opts.rateLimit?.windowMs ?? 20_000,
+      }),
+    );
+  }
+
+  const allowedOrigins =
+    opts.allowedOrigins ??
+    (process.env['HIPP0_ALLOWED_ORIGINS']
+      ? process.env['HIPP0_ALLOWED_ORIGINS'].split(',').map((s) => s.trim()).filter(Boolean)
+      : []);
+
   const server = new Hipp0HttpServer({
     port,
     host,
     routeTable,
+    preRouteMiddlewares,
+    allowedOrigins,
     healthProbe: () => ({
       status: 'ok',
       checks: [],

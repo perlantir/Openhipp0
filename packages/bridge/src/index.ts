@@ -65,11 +65,14 @@ export {
 export {
   Hipp0HttpServer,
   HttpError,
+  createRateLimiter,
   type Hipp0HttpServerConfig,
   type Route,
   type RouteHandler,
   type RouteHandlerContext,
   type RouteResponse,
+  type PreRouteMiddleware,
+  type RateLimitOptions,
 } from './http-server.js';
 export {
   withMediaEnrichment,
