@@ -1,0 +1,12 @@
+@import 'tailwindcss';
+
+/* Baseline reset + typographic defaults for the dashboard.
+ * Tailwind v4 handles the preflight; this file is where we add dashboard-
+ * specific tokens (color scheme, etc.) as they're needed.
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+}

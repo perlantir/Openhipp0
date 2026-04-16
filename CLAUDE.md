@@ -661,6 +661,100 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `packages/core/src/orchestrator/router.ts`.
 - CONFIDENCE: medium. LLM routing is a Phase 8 concern.
 
+### Phase 7a — CLI foundation (init / config / lifecycle)
+
+**DECISION:** Commands are pure functions returning `CommandResult`, wired into commander separately
+
+- REASONING: Lets every command be unit-tested without spawning child processes or stubbing `process.exit`. The commander wiring in `index.ts` is a thin translator: function → result → console.log + exit code. Tests import the function directly.
+- AFFECTS: `packages/cli/src/commands/*.ts`, every test file under `tests/commands/`.
+- CONFIDENCE: high.
+
+**DECISION:** All filesystem access goes through an injected `FileSystem` interface
+
+- REASONING: Tests get an in-memory fake (`createMemoryFs`) that mimics the node:fs/promises surface the CLI actually uses (readFile / writeFile / mkdir / exists). No real disk I/O in unit tests → no flakes, no cleanup, no permission issues in CI.
+- ALTERNATIVES_REJECTED: `memfs` / `mock-fs` packages — extra dependency for a four-method surface.
+- AFFECTS: Every CLI command. The default export `nodeFileSystem` wraps the real module.
+- CONFIDENCE: high.
+
+**DECISION:** `hipp0 start` / `stop` are Phase 8 placeholders that point to the bridge Gateway
+
+- REASONING: A proper daemon manager requires systemd/pm2/docker integration, PID tracking across OSes, and supervisor-style restart. That's an ops concern tracked in Phase 8. `status` is implemented (reads a pidfile + `process.kill(pid, 0)`); `start`/`stop` print guidance instead of half-building a manager.
+- AFFECTS: `src/commands/lifecycle.ts`. `status` returns exit code 0/3 per Unix convention (0 = running, 3 = not running).
+- CONFIDENCE: high.
+
+### Phase 7b — CLI commands (doctor / skill / agent / cron)
+
+**DECISION:** `doctor` takes an injectable `HealthRegistry`, constructs a default one when absent
+
+- REASONING: Production default registers `ConfigCheck` pointed at `~/.hipp0/config.json` with a `Hipp0ConfigSchema` validator. Tests pass their own registry with fake checks so we never hit real disk, LLMs, or docker in unit tests. The registry is the composition boundary — the CLI doesn't register every watchdog check by default; callers who want disk/memory/docker checks add them via `extraChecks`.
+- AFFECTS: `src/commands/doctor.ts`. Doctor exit codes: ok/warn → 0, fail → 1.
+- CONFIDENCE: high.
+
+**DECISION:** `skill install|test|remove` are intentional placeholders
+
+- REASONING: `install` requires a skill registry protocol (Phase 8). `test` requires the full agent runtime + LLM. `remove` is `fs.rm` but semantically tied to `install`. Shipping stubs would mis-signal "these are ready". Instead, `runSkillDeferred` prints why the command will land in Phase 8.
+- AFFECTS: Both the CLI wiring and user docs.
+- CONFIDENCE: high.
+
+**DECISION:** `cron add` validates schedules via `@openhipp0/scheduler.parseCron` before writing config
+
+- REASONING: The config is authoritative; a broken cron persisted now would crash the scheduler at startup. Parsing inline rejects invalid schedules with a clear CLI error. Natural-language input goes through `naturalToCron` first, then the cron parser — catching both "every 99 days" and "hello world" as HIPP0_CLI_CRON_INVALID_SCHEDULE.
+- AFFECTS: `src/commands/cron.ts`.
+- CONFIDENCE: high.
+
+### Phase 7c — CLI commands (memory / misc)
+
+**DECISION:** `memory` commands use a real in-memory SQLite DB in tests (not a mock)
+
+- REASONING: The commands thin-wrap `db.$client.prepare(...)` + `recall.searchSessions`. Faking the Drizzle instance would recreate the entire schema surface. `memoryDb.createClient({ databaseUrl: ':memory:' })` + `runMigrations(db)` is ~3 lines and exercises the real code path end-to-end. This is the same pattern the memory package uses in its own tests.
+- AFFECTS: `tests/commands/memory.test.ts` uses a real in-memory DB; production factory uses the default `~/.hipp0/hipp0.db`.
+- CONFIDENCE: high.
+
+**DECISION:** `migrate` is SQLite-only; Postgres operators are redirected to `pg_dump`
+
+- REASONING: File-copying a DATABASE_URL that resolves to Postgres would produce garbage. `resolveSqlitePath` throws `Hipp0NotImplementedError` on Postgres URLs; the CLI catches it and emits a clear "use pg_dump/pg_restore" message. Avoids teaching two migration paradigms when SQLite is the local-first default.
+- AFFECTS: `src/commands/misc.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** `benchmark` lists shell commands instead of spawning child processes
+
+- REASONING: Spawning `pnpm --filter ... test:bench` from inside the CLI requires handling stdio piping, signal forwarding, cwd detection, and pnpm's own version resolution. Printing the command the operator can copy-paste is simpler, equally useful, and keeps the CLI free of child-process complexity until Phase 8 needs it.
+- AFFECTS: `runBenchmark`. Output contains the exact shell invocation per suite.
+- CONFIDENCE: medium. If operators push back, wrap `execFile` later.
+
+### Phase 7d — Dashboard (React 19 + Tailwind v4 + Vite)
+
+**DECISION:** Vite + Tailwind v4 (not v3) + separate vite / vitest configs
+
+- REASONING: Tailwind v4's `@tailwindcss/vite` plugin is zero-config — `@import 'tailwindcss'` in a CSS file + the vite plugin is the full setup. v3 required postcss.config.js, tailwind.config.js, and `@tailwind base/components/utilities`. Vite config drives the production build; vitest config drives tests (separate so tests don't pull in the Tailwind plugin, which requires a browser).
+- AFFECTS: `packages/dashboard/{vite.config.ts, vitest.config.ts, src/index.css}`.
+- CONFIDENCE: high.
+
+**DECISION:** Vitest uses esbuild's JSX transform instead of `@vitejs/plugin-react`
+
+- REASONING: Type mismatch between vite@6 (bundled transitively through some deps) and vite@7 (vitest's peer). Adding `@vitejs/plugin-react` to vitest.config.ts caused cascading `PluginOption` type errors. esbuild handles `jsx: 'automatic'` natively, which is all our tests need — no Fast Refresh, no HMR. Production build still uses `@vitejs/plugin-react` in `vite.config.ts` for proper Dev/Prod JSX handling.
+- ALTERNATIVES_REJECTED: Downgrade vite; override types with `as any`.
+- AFFECTS: `vitest.config.ts`. If we ever need plugin-react in tests, cast to the right vite version explicitly.
+- CONFIDENCE: medium. Revisit when vitest/vite version alignment shifts.
+
+**DECISION:** WebSocket hook takes an injectable `webSocketCtor`
+
+- REASONING: Jsdom's WebSocket is network-bound; real tests need a fake. Rather than mocking globals, the hook accepts an explicit constructor. Tests pass a tiny `FakeWebSocket` class that tracks `sent` frames and exposes `open()` / `recv()` helpers for driving state. Production leaves `webSocketCtor` unset → falls back to `globalThis.WebSocket`.
+- AFFECTS: `src/hooks/useWebSocket.ts`, `src/pages/Chat.tsx`, all WebSocket tests.
+- CONFIDENCE: high.
+
+**DECISION:** 8 of the 10 pages are placeholder shells; only Home + Chat render interactive UI
+
+- REASONING: Phase 7's gate is "all pages render". Data wiring (Agents, Memory graph viz, Skills, Scheduler, Health charts, Costs, Audit, Settings) requires the HTTP/WebSocket API surface that lands in Phase 8. Shipping a shell that tells the user which CLI command to use instead is honest; shipping fake charts would teach bad habits. Each shell is ~15 lines (header + dashed-border hint box).
+- AFFECTS: Every page in `src/pages/*.tsx` except Home and Chat.
+- CONFIDENCE: high.
+
+**DECISION:** `test/globals: true` + `tests/setup.ts` with `afterEach(cleanup)`
+
+- REASONING: React Testing Library's `render` appends to `document.body`; without cleanup, multiple renders in one file collide (we saw multiple `data-testid="ws-status"` failures). Enabling vitest globals lets the setup file use `afterEach` without importing it in every test. Worth the slight global-pollution cost.
+- AFFECTS: `vitest.config.ts`, `tests/setup.ts`.
+- CONFIDENCE: high.
+
 ---
 
 ## Coding Standards

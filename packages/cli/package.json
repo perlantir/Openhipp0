@@ -2,10 +2,13 @@
   "name": "@openhipp0/cli",
   "version": "0.0.0",
   "private": true,
-  "description": "hipp0 CLI — init/start/stop/doctor/update/skill (fleshed out in Phase 7)",
+  "description": "hipp0 CLI — init/start/status/doctor/skill/memory/agent/cron (Phase 7)",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "bin": {
+    "hipp0": "./bin/hipp0.js"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
@@ -17,5 +20,13 @@
     "lint": "eslint src tests --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo coverage"
+  },
+  "dependencies": {
+    "@openhipp0/core": "workspace:*",
+    "@openhipp0/memory": "workspace:*",
+    "@openhipp0/scheduler": "workspace:*",
+    "@openhipp0/watchdog": "workspace:*",
+    "commander": "^14.0.3",
+    "zod": "^3.25.76"
   }
 }
