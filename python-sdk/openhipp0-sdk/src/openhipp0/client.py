@@ -100,6 +100,129 @@ class HealthAPI(_BaseResource):
         return HealthReport.model_validate(raw)
 
 
+class VoiceAPI(_BaseResource):
+    """Phase 19B — /api/voice/* (mobile + server-side media round-trips)."""
+
+    async def transcribe(
+        self,
+        *,
+        audio_base64: str,
+        mime_type: str | None = None,
+        filename: str | None = None,
+        language: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"audioBase64": audio_base64}
+        if mime_type is not None:
+            body["mimeType"] = mime_type
+        if filename is not None:
+            body["filename"] = filename
+        if language is not None:
+            body["language"] = language
+        return await self._client._request("POST", "/api/voice/transcribe", json=body)
+
+    async def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str | None = None,
+        format: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"text": text}
+        if voice is not None:
+            body["voice"] = voice
+        if format is not None:
+            body["format"] = format
+        return await self._client._request("POST", "/api/voice/synthesize", json=body)
+
+
+class PushAPI(_BaseResource):
+    """Phase 19C — /api/push/register for paired mobile devices."""
+
+    async def register(
+        self,
+        *,
+        device_id: str,
+        push_token: str,
+        platform: str,
+    ) -> dict[str, Any]:
+        return await self._client._request(
+            "POST",
+            "/api/push/register",
+            json={"deviceId": device_id, "pushToken": push_token, "platform": platform},
+        )
+
+
+class WidgetsAPI(_BaseResource):
+    """Phase 19D — /api/widgets pre-shaped payload."""
+
+    async def snapshot(self) -> dict[str, Any]:
+        return await self._client._request("GET", "/api/widgets")
+
+
+class PairingAPI(_BaseResource):
+    """Phase 19 — /api/pairing/* (dashboard issues, mobile redeems, ops lists)."""
+
+    async def issue(
+        self,
+        *,
+        ttl_ms: int | None = None,
+        connection_method: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {}
+        if ttl_ms is not None:
+            body["ttlMs"] = ttl_ms
+        if connection_method is not None:
+            body["connectionMethod"] = connection_method
+        return await self._client._request("POST", "/api/pairing/issue", json=body)
+
+    async def complete(
+        self,
+        *,
+        pairing_token: str,
+        mobile_public_key: str,
+        device_name: str | None = None,
+        platform: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "pairingToken": pairing_token,
+            "mobilePublicKey": mobile_public_key,
+        }
+        if device_name is not None:
+            body["deviceName"] = device_name
+        if platform is not None:
+            body["platform"] = platform
+        return await self._client._request("POST", "/api/pairing/complete", json=body)
+
+    async def list_devices(self) -> list[dict[str, Any]]:
+        raw = await self._client._request("GET", "/api/pairing/devices")
+        return (raw or {}).get("devices", []) if isinstance(raw, dict) else []
+
+    async def remove_device(self, device_id: str) -> None:
+        await self._client._request("DELETE", f"/api/pairing/devices/{device_id}")
+
+
+class AuditAPI(_BaseResource):
+    """Retro-C — /api/audit for dashboard + ops tooling."""
+
+    async def list(
+        self,
+        *,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        action: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if project_id is not None:
+            params["projectId"] = project_id
+        if agent_id is not None:
+            params["agentId"] = agent_id
+        if action is not None:
+            params["action"] = action
+        raw = await self._client._request("GET", "/api/audit", params=params)
+        return (raw or {}).get("events", []) if isinstance(raw, dict) else []
+
+
 class Hipp0Client:
     """Top-level client. All methods are async (run under asyncio)."""
 
@@ -125,6 +248,11 @@ class Hipp0Client:
         self.decisions = DecisionsAPI(self)
         self.memory = MemoryAPI(self)
         self.health = HealthAPI(self)
+        self.voice = VoiceAPI(self)
+        self.push = PushAPI(self)
+        self.widgets = WidgetsAPI(self)
+        self.pairing = PairingAPI(self)
+        self.audit = AuditAPI(self)
 
     async def aclose(self) -> None:
         await self._http.aclose()
