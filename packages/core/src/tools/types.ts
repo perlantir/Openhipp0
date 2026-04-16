@@ -20,7 +20,13 @@ import { Hipp0Error } from '../llm/types.js';
 // Permissions (coarse-grained; fine-grained allow-lists live on ExecutionContext)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type Permission = 'fs.read' | 'fs.write' | 'fs.list' | 'shell.execute' | 'net.fetch';
+export type Permission =
+  | 'fs.read'
+  | 'fs.write'
+  | 'fs.list'
+  | 'shell.execute'
+  | 'net.fetch'
+  | 'browser.use';
 
 export const ALL_PERMISSIONS: readonly Permission[] = [
   'fs.read',
@@ -28,6 +34,7 @@ export const ALL_PERMISSIONS: readonly Permission[] = [
   'fs.list',
   'shell.execute',
   'net.fetch',
+  'browser.use',
 ] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
