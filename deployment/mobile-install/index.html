@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Install Open Hipp0 Remote</title>
+<meta name="description" content="Open Hipp0 Remote — install on iOS + Android without the App Store." />
+<style>
+  :root {
+    --bg: #FAF9F5;
+    --ink: #131314;
+    --muted: #72706B;
+    --line: #E8E6DC;
+    --surface: #F5F4EE;
+    --accent: #D97757;
+    --accent-ink: #FAF9F5;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font: 17px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+          "Roboto", system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 20px;
+  }
+  main {
+    width: 100%;
+    max-width: 560px;
+  }
+  h1 {
+    font: 600 34px/1.15 -apple-system, "SF Pro Display", system-ui, sans-serif;
+    letter-spacing: -0.01em;
+    margin: 0 0 8px;
+  }
+  .lede {
+    color: var(--muted);
+    margin: 0 0 32px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font: 600 20px/1.2 -apple-system, system-ui, sans-serif;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card p { color: var(--muted); margin: 0 0 18px; font-size: 15px; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding: 0 22px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font: 600 16px/1 -apple-system, system-ui, sans-serif;
+    text-decoration: none;
+    transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    margin-left: 8px;
+  }
+  .pill {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .platform-note { font-size: 13px; color: var(--muted); margin-top: 12px; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  ol { padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+  .qr {
+    width: 160px; height: 160px; background: #fff;
+    border: 1px solid var(--line); border-radius: 12px;
+    display: grid; place-items: center; color: var(--muted); font-size: 12px;
+    margin-top: 12px;
+  }
+  .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Open Hipp0 Remote</h1>
+  <p class="lede">
+    Native iOS + Android client for your self-hosted agent. No App Store.
+  </p>
+
+  <section class="card" id="card-ios">
+    <h2>iPhone / iPad <span class="pill">TestFlight</span></h2>
+    <p>
+      TestFlight is Apple's public beta channel. You'll install the TestFlight
+      app, then tap a link to join the Open Hipp0 Remote beta.
+    </p>
+    <div class="row">
+      <a class="btn" id="ios-testflight" href="#" rel="noopener">Join on TestFlight</a>
+      <a class="btn btn-ghost" href="https://apps.apple.com/app/testflight/id899247664">Get TestFlight first</a>
+    </div>
+    <details>
+      <summary>Alternative: sideload the signed <code>.ipa</code></summary>
+      <ol>
+        <li>Install <a href="https://altstore.io/">AltStore</a> or <a href="https://sideloadly.io/">Sideloadly</a> on your Mac/PC.</li>
+        <li>Download the signed IPA: <a id="ios-ipa" href="openhipp0-latest.ipa">openhipp0-latest.ipa</a>.</li>
+        <li>Drag the IPA into AltStore/Sideloadly, connect your phone, install.</li>
+        <li>Free Apple IDs need to re-sign every 7 days; paid ($99/yr) accounts get 1 year.</li>
+      </ol>
+    </details>
+    <p class="platform-note">
+      No App Store review gates this channel. Builds ship as soon as we mark
+      them approved on TestFlight.
+    </p>
+  </section>
+
+  <section class="card" id="card-android">
+    <h2>Android <span class="pill">Direct APK</span></h2>
+    <p>
+      Download the APK, allow install from unknown sources once, done.
+    </p>
+    <div class="row">
+      <a class="btn" id="android-apk" href="openhipp0-latest.apk">Download APK</a>
+      <div class="qr" id="android-qr">scan to install</div>
+    </div>
+    <details>
+      <summary>If Chrome blocks the install</summary>
+      <ol>
+        <li>Open Settings → Apps → Special app access → Install unknown apps.</li>
+        <li>Pick your browser (Chrome, Firefox, etc.) → "Allow from this source".</li>
+        <li>Reopen the APK file from Downloads.</li>
+      </ol>
+    </details>
+    <p class="platform-note">
+      The APK is signed with a stable release key (fingerprint in
+      <code>deployment/mobile-install/SIGNING.txt</code>). Google Play Protect
+      might warn because we're not on Play — tap "Install anyway."
+    </p>
+  </section>
+
+  <section class="card" id="card-other">
+    <h2>Other platforms</h2>
+    <p>
+      Prefer an F-Droid listing, or planning a reproducible build? Both are
+      on the roadmap — track the issue at
+      <code>github.com/openhipp0/openhipp0/issues?q=mobile+distribution</code>.
+    </p>
+  </section>
+
+  <footer>
+    Questions? See
+    <a href="https://github.com/openhipp0/openhipp0/blob/main/docs/mobile-install.md">docs/mobile-install.md</a>.
+  </footer>
+</main>
+<script>
+  // Hide the card that isn't relevant for the visitor's platform so the
+  // primary CTA lands above the fold. Users who want the other platform
+  // can always open the page on that device; this page still ships both
+  // cards in the markup so search engines can index both.
+  (function () {
+    var ua = navigator.userAgent || "";
+    var isIos = /iPhone|iPad|iPod/i.test(ua) || (ua.includes("Macintosh") && "ontouchend" in document);
+    var isAndroid = /Android/i.test(ua);
+    if (isIos) document.getElementById("card-android").classList.add("hidden");
+    else if (isAndroid) document.getElementById("card-ios").classList.add("hidden");
+
+    // Replace these three URLs at deploy time (or use a CI placeholder swap).
+    var TESTFLIGHT_URL = window.__HIPP0_TESTFLIGHT_URL__ || "https://testflight.apple.com/join/REPLACE_ME";
+    var IPA_URL        = window.__HIPP0_IPA_URL__        || "openhipp0-latest.ipa";
+    var APK_URL        = window.__HIPP0_APK_URL__        || "openhipp0-latest.apk";
+    document.getElementById("ios-testflight").href = TESTFLIGHT_URL;
+    document.getElementById("ios-ipa").href = IPA_URL;
+    document.getElementById("android-apk").href = APK_URL;
+  })();
+</script>
+</body>
+</html>

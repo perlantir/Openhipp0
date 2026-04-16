@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@theme/*": ["./src/theme/*"]
+    }
+  },
+  "include": [
+    "index.ts",
+    "app/**/*",
+    "src/**/*",
+    "tests/**/*",
+    "vitest.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".expo",
+    "dist",
+    "ios",
+    "android",
+    "metro.config.js",
+    "babel.config.js",
+    "tailwind.config.js"
+  ]
+}

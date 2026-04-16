@@ -1,8 +1,8 @@
 {
-  "name": "@openhipp0/core",
+  "name": "@openhipp0/relay",
   "version": "0.0.0",
   "private": true,
-  "description": "Agent runtime, LLM abstraction, tool execution, orchestrator",
+  "description": "Standalone WebSocket relay for Open Hipp0 mobile ↔ server (Phase 19). Stateless, routes E2E-encrypted envelopes only.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,19 +14,24 @@
       "default": "./dist/index.js"
     }
   },
+  "bin": {
+    "openhipp0-relay": "./bin/relay.js"
+  },
   "scripts": {
     "build": "tsc",
+    "start": "node bin/relay.js",
+    "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "test:integration": "vitest run tests/integration",
-    "test:smoke": "vitest run tests/smoke.test.ts",
     "lint": "eslint src tests --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo coverage"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.89.0",
-    "openai": "^6.34.0",
-    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.0",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "vitest": "^3.2.4"
   }
 }

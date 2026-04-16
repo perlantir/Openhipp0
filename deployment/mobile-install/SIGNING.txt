@@ -1,0 +1,23 @@
+Open Hipp0 Remote — APK signing fingerprint
+============================================
+
+Replace this file at release time with the actual fingerprint of your
+Android release keystore:
+
+  keytool -list -v -keystore release.keystore -alias <alias> \
+    | grep "SHA256:"
+
+Expected format:
+
+  SHA256: AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:\
+          AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99
+
+Users who care can verify the APK with:
+
+  keytool -printcert -jarfile openhipp0-latest.apk
+
+and compare the printed SHA-256 against the value here.
+
+If the fingerprint ever rotates (key lost, compromised, rotated on
+policy), users will have to uninstall + reinstall — Android refuses to
+update an app signed by a different key. Plan key hygiene accordingly.

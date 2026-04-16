@@ -48,6 +48,12 @@ export type {
 /** Skills engine: manifest validation, loader with precedence, registry. */
 export * as skills from './skills/index.js';
 
+/** Mobile-pairing primitives (Phase 19). */
+export * as pairing from './pairing/index.js';
+
+/** Push notifications — server-side sender + registry (Phase 19C). */
+export * as push from './push/index.js';
+
 /** Security: agent policy enforcement, templates, execution governance. */
 export * as security from './security/index.js';
 

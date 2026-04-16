@@ -1,0 +1,23 @@
+# Self-hosted Open Hipp0 relay — 30-second deploy.
+# Usage:
+#   1. Generate credentials: `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
+#   2. Hash it:              `node -e "console.log(require('crypto').createHash('sha256').update('<paste token>').digest('hex'))"`
+#   3. Store creds.json with {clientId, tokenSha256, label} per client.
+#   4. `docker compose up -d`
+version: "3.9"
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: packages/relay/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3101:3101"
+    environment:
+      HIPP0_RELAY_PORT: 3101
+      HIPP0_RELAY_CREDS_FILE: /run/secrets/creds
+    secrets:
+      - creds
+secrets:
+  creds:
+    file: ./creds.json

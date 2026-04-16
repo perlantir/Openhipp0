@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+coverage/
+.turbo/
+*.log
+.DS_Store
+ios/
+android/
+web-build/

@@ -24,7 +24,10 @@ COPY packages ./packages
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
-RUN pnpm -r build
+# The mobile + relay packages aren't part of the server image: mobile ships
+# via EAS, relay has its own Dockerfile. Exclude them from the multi-package
+# build so this image doesn't need react-native / expo native toolchains.
+RUN pnpm exec turbo run build --filter='!@openhipp0/mobile' --filter='!@openhipp0/relay'
 
 
 # ── Runtime deps only ──────────────────────────────────────────────────────

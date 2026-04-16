@@ -18,6 +18,9 @@ import {
   type Route,
 } from '@openhipp0/bridge';
 import type { CommandResult } from '../types.js';
+import { buildVoiceRoutes } from './voice-routes.js';
+import { buildPushRoutes } from './push-routes.js';
+import { buildWidgetsRoutes } from './widgets-routes.js';
 
 export interface ServeOptions {
   port?: number;
@@ -70,7 +73,18 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
         },
       }),
     };
-    routeTable = [...built.routes, ...configRoutes, healthAlias];
+    const apiToken = opts.apiToken ?? process.env['HIPP0_API_TOKEN'];
+    const voiceRoutes = buildVoiceRoutes(apiToken);
+    const pushRoutes = buildPushRoutes(apiToken);
+    const widgetsRoutes = buildWidgetsRoutes(apiToken);
+    routeTable = [
+      ...built.routes,
+      ...configRoutes,
+      ...voiceRoutes,
+      ...pushRoutes,
+      ...widgetsRoutes,
+      healthAlias,
+    ];
     closeDb = built.close;
   }
 
