@@ -722,6 +722,58 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `runBenchmark`. Output contains the exact shell invocation per suite.
 - CONFIDENCE: medium. If operators push back, wrap `execFile` later.
 
+### Phase 8 — Integration, MCP, Python SDK, Docs, Deployment
+
+**DECISION:** E2E tests live in a dedicated `@openhipp0/e2e` workspace package
+
+- REASONING: Cross-cutting scenarios (Web bridge → Gateway → AgentRuntime → MemoryAdapter → SQLite) don't belong in any single package's test suite; putting them in a sibling lets them import every package through the normal workspace resolution.
+- ALTERNATIVES_REJECTED: Root-level `tests/e2e/` — would require a bespoke tsconfig + vitest config outside the workspace pattern we've used everywhere else.
+- AFFECTS: `packages/e2e/`, root `package.json`, `turbo.json`.
+- CONFIDENCE: high.
+
+**DECISION:** Scripted LLM (`FakeLLMProvider`) for E2E instead of real SDK mocks
+
+- REASONING: E2E still runs through `LLMClient` (retry + circuit breaker + budget), so wiring a real provider behind a fake factory is the most realistic test surface. The factory injection point was designed for this in Phase 1e.
+- AFFECTS: `packages/e2e/src/fake-llm.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** MCP server uses `registerHipp0Tool` adapter over hand-rolling each tool
+
+- REASONING: Hipp0 Tools already have Zod validators; extracting `.shape` lets MCP's `inputSchema` stay in sync with the tool's own validator. Hand-rolled tools (memory CRUD, health, cron) go through the SDK directly since their shapes aren't driven by a Hipp0 Tool.
+- AFFECTS: `packages/mcp/src/tool-adapter.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Python SDK is a flat, 6-package monorepo under `python-sdk/`
+
+- REASONING: Each package ships independently on PyPI; a flat layout avoids importlib namespace surprises and lets each have its own `pyproject.toml`. Base SDK + 5 framework adapters (CrewAI / LangGraph / LangChain / AutoGen / OpenAI Agents).
+- ALTERNATIVES_REJECTED: uv workspace — adds a tool dependency for contributors without material benefit at this size.
+- AFFECTS: `python-sdk/`, `scripts/test-python.sh`.
+- CONFIDENCE: high.
+
+**DECISION:** Framework integrations import their framework LAZILY
+
+- REASONING: The integration packages must install cleanly on machines without the framework; lazy imports (or not importing at all) lets CI test every adapter without Playwright / CrewAI / LangGraph binaries. `auto()` silently skips missing frameworks for the same reason.
+- AFFECTS: All 5 `openhipp0-*` framework packages.
+- CONFIDENCE: high.
+
+**DECISION:** Phase 8's HTTP surface is GET /health only; REST endpoints are a Python-SDK contract, implemented later
+
+- REASONING: Docker/Compose/Railway/K8s healthchecks need `/health`; the richer API surface (decisions/memory/agents) is a bigger design decision (auth model, pagination, webhooks) that doesn't belong on Phase 8's critical path. The Python SDK targets the future shape so users can write code today.
+- AFFECTS: `packages/bridge/src/http-server.ts`, `docs/api-reference.md`, Python SDK client.
+- CONFIDENCE: medium.
+
+**DECISION:** Docker image runs `hipp0 serve` as a non-root user with a volume-mounted `~/.hipp0`
+
+- REASONING: Principle of least privilege + persistent config survives image upgrades. Standard Docker hardening.
+- AFFECTS: `Dockerfile`, `deployment/docker-compose.prod.yml`.
+- CONFIDENCE: high.
+
+**DECISION:** (Phase 8 deferred) `hipp0 serve` binary runtime smoke test
+
+- REASONING: Running `hipp0 serve` directly against the source tree fails today because (a) every workspace package's `package.json#main` still points at `src/index.ts`, which Node's native ESM loader can't consume, and (b) `@slack/bolt` is CJS + uses named imports in `packages/bridge/src/slack.ts` — a pattern esbuild/vitest handle but native Node doesn't. Fix is two-parter: shift `main` fields to `dist/` (with a `development` export condition so vitest still finds source), and change the slack import to default + destructure. Blocking this on Phase 9 "production hardening" lets Phase 8 ship the Docker image + compose files + CI/CD without gating on a monorepo-wide refactor.
+- AFFECTS: `packages/*/package.json`, `packages/bridge/src/slack.ts`, `packages/cli/bin/hipp0.js`.
+- CONFIDENCE: high. (The gap is understood; the fix is deliberate future work.)
+
 ### Phase 7d — Dashboard (React 19 + Tailwind v4 + Vite)
 
 **DECISION:** Vite + Tailwind v4 (not v3) + separate vite / vitest configs
