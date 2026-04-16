@@ -388,6 +388,92 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `hipp0-adapter.ts`.
 - CONFIDENCE: medium — revisit if observability layer gains a quieter degradation path.
 
+### Phase 3a — Bridge interface + reliability primitives
+
+**DECISION:** Single `MessageBridge` interface across all 5+ platforms with opaque `platformData`
+
+- REASONING: Keeps the gateway platform-agnostic. Platform-specific fields (Slack trigger_id, Discord guildId, Telegram reply_parameters) pass through without the gateway touching them. Bridges advertise `BridgeCapabilities` so callers can adapt (e.g. dashboard hides button UI if capabilities.buttons=false).
+- AFFECTS: Every bridge + the gateway.
+- CONFIDENCE: high.
+
+**DECISION:** `ReconnectSupervisor` is a wrapper, not a base class
+
+- REASONING: Each bridge already has its own SDK-specific lifecycle (discord.js Client, grammY Bot, Bolt App). Wrapping the connect() function lets every bridge reuse the exponential-backoff logic without forcing a common base class.
+- AFFECTS: Used by bridges that benefit from it (initially none in 3b/3c — each SDK handles its own reconnects — but available for custom bridges + the future WebSocket bridge layer).
+- CONFIDENCE: medium.
+
+**DECISION:** `OutboundQueue` drops OLDEST on overflow (not newest)
+
+- REASONING: After a long disconnect, the most recent queued message is typically most relevant to what the user just asked. A two-hour-old "deploy starting…" message arriving after the deploy already finished is worse than never arriving.
+- AFFECTS: Any bridge that pipes `send()` through the queue during offline periods.
+- CONFIDENCE: medium.
+
+### Phase 3b — CLI + Web bridges
+
+**DECISION:** Test fake for WebBridge uses a 30ms wait instead of draining the initial status frame
+
+- REASONING: ws emits its 'message' event when a frame arrives; attaching the listener after awaiting 'open' loses the server's initial status frame. A brief wait for the server-side connection setup is simpler than synchronizing frame delivery perfectly. Individual tests filter by `type === 'response'` where they care.
+- AFFECTS: `packages/bridge/tests/web.test.ts`.
+- CONFIDENCE: medium.
+
+**DECISION:** WebBridge JSON wire protocol with `{type: 'message' | 'button' | 'response' | 'status'}`
+
+- REASONING: One self-describing envelope in both directions. Button presses arrive as their own frame type (not overloading 'message') so the server can distinguish "user typed yes" from "user clicked Yes button".
+- AFFECTS: WS clients (dashboard chat UI, external consumers).
+- CONFIDENCE: high.
+
+**DECISION:** CLI bridge buttons render as numbered text ("[1] Yes [2] No")
+
+- REASONING: No graphical button support in a terminal. Capability still advertises `buttons: true` because the user CAN act on them by number, so gateway-level prompts that depend on buttons still work.
+- AFFECTS: `CliBridge.send`, capability shape.
+- CONFIDENCE: high.
+
+### Phase 3c — Discord + Telegram + Slack
+
+**DECISION:** Each platform bridge exposes an injectable SDK client (`client` / `bot` / `app`) for testing
+
+- REASONING: The real SDKs (discord.js / grammY / @slack/bolt) own sockets, timers, retries, and network I/O that are extremely painful to mock. Dependency-injecting the top-level SDK handle lets tests supply a tiny fake that implements only the surface the bridge touches.
+- AFFECTS: Test strategy for all three platform bridges. The test fakes live in test files.
+- CONFIDENCE: high.
+
+**DECISION:** Bot-originated echo messages are filtered inside each bridge (not at the gateway)
+
+- REASONING: Every platform has its own way to identify "this came from my bot" — Discord's `author.id === client.user.id`, Telegram's separate bot Update type (grammY's default handlers exclude bot messages), Slack's `subtype` field. Each bridge is the only layer that understands its SDK's shape.
+- AFFECTS: Discord + Slack bridges explicitly filter; Telegram is filtered by the SDK handler path.
+- CONFIDENCE: high.
+
+**DECISION:** Button press payloads surface as `IncomingMessage.text = buttonValue` with `platformData.frameType`
+
+- REASONING: Treating a button press as a message (with its value as the text) lets the same agent code handle both. `platformData.frameType` lets callers distinguish when they must (audit, special routing).
+- AFFECTS: Web, Telegram, Slack, Discord bridges.
+- CONFIDENCE: high.
+
+### Phase 3d — Unified Gateway
+
+**DECISION:** Per-session conversation buffer is passed to the agent as `slice()`, not reference
+
+- REASONING: Passing the live array meant vitest mocks captured a reference — `mock.calls[0]` would show the array in its POST-push state, not at call time. Bug spotted immediately in the gateway tests. Defensive-copy is cheap for <40-entry arrays and prevents any future callers from accidentally mutating the gateway's state.
+- AFFECTS: `Gateway.route()`.
+- CONFIDENCE: high.
+
+**DECISION:** Session key is `${platform}|${userId}|${channelId}` (not `${platform}|${userId}`)
+
+- REASONING: A user in Discord might be in multiple channels with the bot. Treating each as a distinct session matches user expectations ("ops channel and dev channel are separate conversations").
+- AFFECTS: Conversation continuity, session counting for observability.
+- CONFIDENCE: high.
+
+**DECISION:** Gateway's agent dependency is structural, not a direct `AgentRuntime` import
+
+- REASONING: `Gateway` takes `{ handleMessage(req): Promise<AgentResponse> }`. Tests pass stubs, production passes AgentRuntime, future multi-agent orchestrators (Phase 6) can pass their own routers — none of which require changing gateway code.
+- AFFECTS: `GatewayAgent` interface.
+- CONFIDENCE: high.
+
+**DECISION:** Agent errors and send() errors both route through a single `onError` hook
+
+- REASONING: Both are "a message didn't get delivered" failures. The observability layer doesn't usually need to distinguish; when it does, the origin metadata (`{platform, msgId}`) plus the error's own type is enough.
+- AFFECTS: Gateway error handling semantics.
+- CONFIDENCE: medium.
+
 ---
 
 ## Coding Standards
