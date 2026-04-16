@@ -66,6 +66,9 @@ export * as integrations from './integrations/index.js';
 /** Voice, image generation, vision (Phase 11). */
 export * as media from './media/index.js';
 
+/** Enterprise: RLS, SSO, org model, audit export, per-agent API keys (Phase 14). */
+export * as enterprise from './enterprise/index.js';
+
 // Top-level re-exports — consumers in @openhipp0/bridge etc. want to use the
 // MediaEngine + stub classes without the `media.` namespace prefix.
 export {
