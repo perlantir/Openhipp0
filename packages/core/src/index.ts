@@ -81,6 +81,9 @@ export * as training from './training/index.js';
 /** Phase 24 — AES-256-GCM encrypted backup + restore (local + S3-compatible). */
 export * as backup from './backup/index.js';
 
+/** Phase 25 — Offline mode primitives (outbound queue, conflict resolver, cache-first, local-LLM stub). */
+export * as offline from './offline/index.js';
+
 // Ergonomic top-level re-exports for consumers (e2e, SDK).
 export {
   toJsonl,

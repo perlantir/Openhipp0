@@ -858,6 +858,41 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 25 — Offline mode (`core/offline`)
+
+**DECISION:** Generalize mobile's sync primitives into `core/offline`; mobile keeps its vendored copy until opportunistic migration
+
+- REASONING: Per scope doc: "Generalize the Phase-19 mobile sync infrastructure. Don't build a parallel offline system." Lifting the primitives into core lets desktop CLI + server share one implementation. Mobile's 31 tests + its RN-specific wiring make a forced migration regression-risky for zero functional payoff. Same play as retro-d deferred the phase17 split — migrate on-touch, delete the mobile copy when everything references core.
+- AFFECTS: `packages/core/src/offline/`; mobile sync/* unchanged.
+- CONFIDENCE: medium.
+
+**DECISION:** Cache-first reads are explicit per-call (`cacheFirstRead`), not a monkeypatched wrapper around every read path
+
+- REASONING: Wrappers that automatically intercept reads force every caller to reason about async layers they didn't ask for. An explicit helper at each read site keeps the intent visible: "this read is cache-first, falling back to remote, and fine with stale on failure." Matches the Phase-6.1 scheduler pattern (explicit `runCron` calls vs. a monkeypatched Date.now).
+- AFFECTS: `cache.cacheFirstRead`.
+- CONFIDENCE: high.
+
+**DECISION:** `OnlineStatus` has three states (`online` | `degraded` | `offline`), not two
+
+- REASONING: A binary online/offline model flags every multi-second probe as "offline" and flips the UI into degraded mode unnecessarily. The three-state model surfaces the "we're slow" middle ground the dashboard can indicate without blocking reads. Mobile Phase 19's UI already has three indicator states; mirroring here prevents divergence.
+- AFFECTS: `OnlineStatusTracker`.
+- CONFIDENCE: high.
+
+**DECISION:** Local LLM fallback limited to summarize + classify only
+
+- REASONING: Per scope doc. Ollama's tool-call support on small models is unreliable — running agent loops offline produces plausible-but-broken tool sequences that then fail silently when a network comes back. Summarize + classify are strictly better than no answer (medium-quality summary > empty summary; best-guess classification > null). Tool use stays cloud-only until there's a reliable local-tool-call story.
+- ALTERNATIVES_REJECTED: Full local agent loop — see above.
+- AFFECTS: `LocalLLMFallback` interface.
+- CONFIDENCE: high.
+
+**DECISION:** `strategyForKind` extended with server-side kinds (`audit-event`, `llm-usage`, `backup-manifest`)
+
+- REASONING: These are immutable or monotonically-appended on the server. Last-write-wins for an audit event would let a client overwrite an already-recorded event, defeating the audit log. Server-wins is correct + safe for these record types.
+- AFFECTS: `strategyForKind`.
+- CONFIDENCE: high.
+
+---
+
 ### Phase 24 — Cloud backup + restore (`core/backup`)
 
 **DECISION:** Per-table AES-256-GCM blobs + separately-encrypted manifest, not a single monolithic ciphertext
