@@ -21,3 +21,8 @@ export {
   type PairingSessionStore,
   type PairedDeviceStore,
 } from './token.js';
+export {
+  SqlitePairingSessionStore,
+  SqlitePairedDeviceStore,
+  type BetterSqliteLike,
+} from './sqlite-store.js';

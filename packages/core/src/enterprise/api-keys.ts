@@ -128,3 +128,18 @@ export async function verifyApiKey(
   await store.update(key.id, { lastUsedAt: now.toISOString() });
   return { ok: true, key };
 }
+
+/**
+ * Resolver shape consumed by the HTTP auth middleware — curries an
+ * AgentApiKeyStore so the middleware doesn't need to know about Phase 14
+ * internals.
+ */
+export interface ApiKeyResolver {
+  verify(plaintext: string, now?: Date): Promise<VerifyResult>;
+}
+
+export function createApiKeyResolver(store: AgentApiKeyStore): ApiKeyResolver {
+  return {
+    verify: (plaintext, now) => verifyApiKey(store, plaintext, now),
+  };
+}

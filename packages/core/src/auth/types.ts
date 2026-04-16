@@ -13,6 +13,8 @@ export interface OAuth2Provider {
   readonly id: string;
   readonly authorizationEndpoint: string;
   readonly tokenEndpoint: string;
+  /** RFC 7009 revocation endpoint. Optional — providers that lack one skip server-side revocation. */
+  readonly revocationEndpoint?: string;
   /** Default scopes requested if the caller doesn't pass any. */
   readonly defaultScopes?: readonly string[];
   /** Extra query params on the authorize URL (prompt=consent, access_type=offline). */

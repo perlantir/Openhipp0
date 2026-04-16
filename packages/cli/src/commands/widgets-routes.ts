@@ -18,18 +18,10 @@
  */
 
 import type { Route } from '@openhipp0/bridge';
+import type { AuthMiddleware } from './api-auth.js';
 
 interface RouteContext {
   req: unknown;
-}
-
-function requireBearer(apiToken: string | undefined, handler: Route['handler']): Route['handler'] {
-  if (!apiToken) return handler;
-  return async (ctx) => {
-    const raw = (ctx.req as { headers?: Record<string, string | undefined> }).headers?.['authorization'];
-    if (raw !== `Bearer ${apiToken}`) return { status: 401, body: { error: 'unauthorized' } };
-    return handler(ctx);
-  };
 }
 
 interface ConfigShape {
@@ -65,7 +57,7 @@ function nextCron(tasks: NonNullable<ConfigShape['cronTasks']>): {
   };
 }
 
-export function buildWidgetsRoutes(apiToken: string | undefined): readonly Route[] {
+export function buildWidgetsRoutes(auth: AuthMiddleware): readonly Route[] {
   const handler: Route['handler'] = async (_ctx: RouteContext) => {
     const cfg = await readConfig();
     const agents = (cfg.agents ?? []).map((a) => ({
@@ -88,5 +80,5 @@ export function buildWidgetsRoutes(apiToken: string | undefined): readonly Route
       },
     };
   };
-  return [{ method: 'GET', path: '/api/widgets', handler: requireBearer(apiToken, handler) }];
+  return [{ method: 'GET', path: '/api/widgets', handler: auth(handler) }];
 }

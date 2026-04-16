@@ -21,6 +21,9 @@ import type { CommandResult } from '../types.js';
 import { buildVoiceRoutes } from './voice-routes.js';
 import { buildPushRoutes } from './push-routes.js';
 import { buildWidgetsRoutes } from './widgets-routes.js';
+import { buildApiAuth, type ApiKeyResolver, type AuthMiddleware } from './api-auth.js';
+import { buildRlsMiddleware, chainMiddleware, type RlsDb } from './rls-middleware.js';
+import { buildPairingRoutes } from './pairing-routes.js';
 
 export interface ServeOptions {
   port?: number;
@@ -35,6 +38,10 @@ export interface ServeOptions {
   databaseUrl?: string;
   /** Bearer token required for API access. Default: HIPP0_API_TOKEN env. */
   apiToken?: string;
+  /** Optional per-agent API key resolver (Phase 14 AgentApiKeyStore). */
+  apiKeyResolver?: ApiKeyResolver;
+  /** Optional Postgres handle for RLS session context. SQLite leaves this null. */
+  rlsDb?: RlsDb | null | (() => Promise<RlsDb | null> | RlsDb | null);
   /** Handler for inbound chat frames; defaults to an echo responder. */
   onMessage?: (msg: IncomingMessage) => Promise<OutgoingMessage | undefined> | OutgoingMessage | undefined;
   /** Pre-built routeTable for tests / advanced wiring. */
@@ -53,7 +60,24 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
       databaseUrl: opts.databaseUrl ?? process.env['HIPP0_DATABASE_URL'],
       apiToken: opts.apiToken ?? process.env['HIPP0_API_TOKEN'],
     });
-    const configRoutes = buildConfigRoutes(opts.apiToken ?? process.env['HIPP0_API_TOKEN']);
+    const baseAuth = buildApiAuth({
+      staticToken: opts.apiToken ?? process.env['HIPP0_API_TOKEN'],
+      keyStore: opts.apiKeyResolver,
+    });
+    const rlsDbResolver: () => Promise<RlsDb | null> = (() => {
+      const provided = opts.rlsDb;
+      if (typeof provided === 'function') return async () => (await provided()) ?? null;
+      if (provided) return async () => provided;
+      return async () => null;
+    })();
+    const rls = buildRlsMiddleware({
+      getDb: rlsDbResolver,
+      ...(process.env['HIPP0_DEFAULT_PROJECT_ID'] && {
+        defaultProjectId: process.env['HIPP0_DEFAULT_PROJECT_ID'],
+      }),
+    });
+    const auth = chainMiddleware(baseAuth, rls);
+    const configRoutes = buildConfigRoutes(auth);
     // /api/health aliases /health so browsers can reach it through the
     // dashboard's /api/* proxy (the root /health can't be proxied without
     // shadowing the React Router route of the same name).
@@ -73,16 +97,30 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
         },
       }),
     };
-    const apiToken = opts.apiToken ?? process.env['HIPP0_API_TOKEN'];
-    const voiceRoutes = buildVoiceRoutes(apiToken);
-    const pushRoutes = buildPushRoutes(apiToken);
-    const widgetsRoutes = buildWidgetsRoutes(apiToken);
+    const voiceRoutes = buildVoiceRoutes(auth);
+    const pushRoutes = buildPushRoutes(auth);
+    const widgetsRoutes = buildWidgetsRoutes(auth);
+
+    // SQLite-backed pairing stores so pending pairings + paired devices
+    // survive a server restart. The raw better-sqlite3 handle is exposed by
+    // the Drizzle client as $client.
+    const core = await import('@openhipp0/core');
+    const { SqlitePairingSessionStore, SqlitePairedDeviceStore } = core.pairing;
+    const sessionStore = new SqlitePairingSessionStore(built.rawDb as ConstructorParameters<typeof SqlitePairingSessionStore>[0]);
+    const deviceStore = new SqlitePairedDeviceStore(built.rawDb as ConstructorParameters<typeof SqlitePairedDeviceStore>[0]);
+    const pairingRoutes = buildPairingRoutes(auth, {
+      sessionStore,
+      deviceStore,
+      serverUrl: process.env['HIPP0_PUBLIC_URL'] ?? `http://${host}:${port}`,
+      serverId: process.env['HIPP0_SERVER_ID'] ?? 'self',
+    });
     routeTable = [
       ...built.routes,
       ...configRoutes,
       ...voiceRoutes,
       ...pushRoutes,
       ...widgetsRoutes,
+      ...pairingRoutes,
       healthAlias,
     ];
     closeDb = built.close;
@@ -154,17 +192,8 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
  * by dropping anything under `llm.apiKey`-like fields even though the
  * current config schema doesn't store them (future-proofing).
  */
-function buildConfigRoutes(apiToken: string | undefined): readonly Route[] {
-  const wrap = (handler: Route['handler']): Route['handler'] =>
-    apiToken
-      ? async (ctx) => {
-          const raw = (ctx.req as { headers?: Record<string, string | undefined> }).headers?.['authorization'];
-          if (raw !== `Bearer ${apiToken}`) {
-            return { status: 401, body: { error: 'unauthorized' } };
-          }
-          return handler(ctx);
-        }
-      : handler;
+function buildConfigRoutes(auth: AuthMiddleware): readonly Route[] {
+  const wrap = auth;
 
   const loadConfig = async (): Promise<Record<string, unknown>> => {
     const { readConfig } = await import('../config.js');
@@ -214,7 +243,11 @@ function sanitizeConfig(cfg: Record<string, unknown>): Record<string, unknown> {
 async function buildApiRoutes(opts: {
   databaseUrl: string | undefined;
   apiToken: string | undefined;
-}): Promise<{ routes: Route[]; close: () => void }> {
+}): Promise<{
+  routes: Route[];
+  close: () => void;
+  rawDb: unknown;
+}> {
   const memory = await import('@openhipp0/memory');
   const client = memory.db.createClient(
     opts.databaseUrl ? { databaseUrl: opts.databaseUrl } : undefined,
@@ -229,6 +262,7 @@ async function buildApiRoutes(opts: {
   return {
     routes: routes as unknown as Route[],
     close: () => memory.db.closeClient(client),
+    rawDb: (client as unknown as { $client: unknown }).$client,
   };
 }
 

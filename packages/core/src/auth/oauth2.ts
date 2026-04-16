@@ -29,6 +29,14 @@ export interface OAuth2ClientConfig {
   fetch?: OAuth2Fetch;
   /** Skew (seconds) below which a token is considered expired. Default 30s. */
   expirySkewSec?: number;
+  /**
+   * Optional rotation policy. Called on every getAccessToken() even when the
+   * access token is still fresh; if it returns true we proactively refresh
+   * the token. Useful for: rotating near half-life, rotating after N calls,
+   * rotating on a wall-clock schedule, forcing rotation after a security
+   * incident. Not called when no refresh token is available.
+   */
+  shouldRotate?: (tokens: OAuth2TokenSet) => boolean | Promise<boolean>;
 }
 
 export interface StartAuthorizationArgs {
@@ -118,17 +126,26 @@ export class OAuth2Client {
 
   /**
    * Return a currently-valid access token for the account, refreshing if the
-   * stored one is expired (or about to be).
+   * stored one is expired (or about to be). Also runs the optional
+   * `shouldRotate` policy and rotates proactively when it returns true.
    */
   async getAccessToken(account: string): Promise<string> {
     const stored = await this.config.store.get(this.config.provider.id, account);
     if (!stored) {
       throw new Error(`No stored tokens for ${this.config.provider.id}/${account} — call completeAuthorization first.`);
     }
-    if (this.isFresh(stored)) return stored.accessToken;
+
+    const expired = !this.isFresh(stored);
+    const rotatePolicy =
+      !expired && stored.refreshToken && this.config.shouldRotate
+        ? await this.config.shouldRotate(stored)
+        : false;
+
+    if (!expired && !rotatePolicy) return stored.accessToken;
     if (!stored.refreshToken) {
       throw new Error(`Token expired and no refresh token available for ${this.config.provider.id}/${account}`);
     }
+
     const refreshed = await this.refresh(stored.refreshToken);
     // Some providers don't re-issue the refresh token — fall back to the old one.
     const merged: OAuth2TokenSet = {
@@ -139,12 +156,85 @@ export class OAuth2Client {
     return merged.accessToken;
   }
 
+  /**
+   * Force-rotate the stored tokens for an account. Returns the new token set.
+   * Throws if no refresh token is available.
+   */
+  async rotate(account: string): Promise<OAuth2TokenSet> {
+    const stored = await this.config.store.get(this.config.provider.id, account);
+    if (!stored) throw new Error(`No stored tokens for ${this.config.provider.id}/${account}`);
+    if (!stored.refreshToken) {
+      throw new Error(`No refresh token — cannot rotate ${this.config.provider.id}/${account}`);
+    }
+    const refreshed = await this.refresh(stored.refreshToken);
+    const merged: OAuth2TokenSet = {
+      ...refreshed,
+      refreshToken: refreshed.refreshToken ?? stored.refreshToken,
+    };
+    await this.config.store.set(this.config.provider.id, account, merged);
+    return merged;
+  }
+
+  /**
+   * Revoke the stored tokens for an account. If the provider exposes a
+   * revocation endpoint (RFC 7009), both the access and refresh tokens are
+   * revoked server-side. Always deletes from the local store, even if the
+   * server-side revocation fails — we prefer a permissive local delete over
+   * tokens that linger after an explicit revoke intent.
+   */
+  async revoke(account: string): Promise<{ localDeleted: boolean; serverRevoked: boolean }> {
+    const stored = await this.config.store.get(this.config.provider.id, account);
+    if (!stored) return { localDeleted: false, serverRevoked: false };
+
+    let serverRevoked = false;
+    const endpoint = this.config.provider.revocationEndpoint;
+    if (endpoint) {
+      try {
+        if (stored.accessToken) {
+          await this.postRevocation(endpoint, stored.accessToken, 'access_token');
+        }
+        if (stored.refreshToken) {
+          await this.postRevocation(endpoint, stored.refreshToken, 'refresh_token');
+        }
+        serverRevoked = true;
+      } catch {
+        // Best-effort. Fall through to the local delete so the user's intent
+        // ("invalidate these credentials") is honored even if the remote
+        // failed. The returned flag lets the caller log / retry.
+        serverRevoked = false;
+      }
+    }
+    const localDeleted = await this.config.store.delete(this.config.provider.id, account);
+    return { localDeleted, serverRevoked };
+  }
+
   isFresh(tokens: OAuth2TokenSet): boolean {
     const now = Math.floor(Date.now() / 1000);
     return tokens.expiresAt > now + this.expirySkewSec;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+
+  private async postRevocation(endpoint: string, token: string, hint: string): Promise<void> {
+    const body = new URLSearchParams({
+      token,
+      token_type_hint: hint,
+      client_id: this.config.clientId,
+    });
+    if (this.config.clientSecret) body.set('client_secret', this.config.clientSecret);
+    const resp = await this.fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+      },
+      body: body.toString(),
+    });
+    if (!resp.ok && resp.status !== 200) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`OAuth2 revocation failed (${resp.status}): ${text.slice(0, 200)}`);
+    }
+  }
 
   private async refresh(refreshToken: string): Promise<OAuth2TokenSet> {
     const body = new URLSearchParams({

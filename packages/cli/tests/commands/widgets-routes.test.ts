@@ -1,11 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { buildWidgetsRoutes } from '../../src/commands/widgets-routes.js';
+import { buildApiAuth } from '../../src/commands/api-auth.js';
 
 // readConfig is dynamic-imported inside widgets-routes; stub via vi.mock.
 vi.mock('../../src/config.js', () => ({
   readConfig: vi.fn(),
 }));
 import { readConfig } from '../../src/config.js';
+
+const openAuth = buildApiAuth({});
+const secretAuth = buildApiAuth({ staticToken: 'secret' });
 
 describe('buildWidgetsRoutes', () => {
   beforeEach(() => {
@@ -22,7 +26,7 @@ describe('buildWidgetsRoutes', () => {
       ],
       currency: 'EUR',
     });
-    const [route] = buildWidgetsRoutes(undefined);
+    const [route] = buildWidgetsRoutes(openAuth);
     const res = await route!.handler({ req: {}, params: {}, query: {}, body: undefined });
     const body = res.body as {
       agents: { id: string; name: string }[];
@@ -44,7 +48,7 @@ describe('buildWidgetsRoutes', () => {
         { id: 'c', name: 'Disabled', enabled: false, nextFireAt: '2026-04-20T00:00:00Z' },
       ],
     });
-    const [route] = buildWidgetsRoutes(undefined);
+    const [route] = buildWidgetsRoutes(openAuth);
     const res = await route!.handler({ req: {}, params: {}, query: {}, body: undefined });
     const body = res.body as { nextAutomation?: unknown };
     expect(body.nextAutomation).toBeUndefined();
@@ -52,7 +56,7 @@ describe('buildWidgetsRoutes', () => {
 
   it('enforces bearer auth when api token is set', async () => {
     (readConfig as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: [] });
-    const [route] = buildWidgetsRoutes('secret');
+    const [route] = buildWidgetsRoutes(secretAuth);
     const res = await route!.handler({
       req: { headers: { authorization: 'Bearer wrong' } },
       params: {},
@@ -64,7 +68,7 @@ describe('buildWidgetsRoutes', () => {
 
   it('accepts correct bearer', async () => {
     (readConfig as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: [] });
-    const [route] = buildWidgetsRoutes('secret');
+    const [route] = buildWidgetsRoutes(secretAuth);
     const res = await route!.handler({
       req: { headers: { authorization: 'Bearer secret' } },
       params: {},
@@ -76,7 +80,7 @@ describe('buildWidgetsRoutes', () => {
 
   it('gracefully returns empty shape if readConfig throws', async () => {
     (readConfig as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('no config'));
-    const [route] = buildWidgetsRoutes(undefined);
+    const [route] = buildWidgetsRoutes(openAuth);
     const res = await route!.handler({ req: {}, params: {}, query: {}, body: undefined });
     const body = res.body as { agents: unknown[]; cost: { currency: string } };
     expect(body.agents).toEqual([]);

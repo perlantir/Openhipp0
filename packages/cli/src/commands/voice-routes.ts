@@ -10,19 +10,11 @@
  */
 
 import type { Route } from '@openhipp0/bridge';
+import type { AuthMiddleware } from './api-auth.js';
 
 interface RouteContext {
   req: unknown;
   body?: unknown;
-}
-
-function requireBearer(apiToken: string | undefined, handler: Route['handler']): Route['handler'] {
-  if (!apiToken) return handler;
-  return async (ctx) => {
-    const raw = (ctx.req as { headers?: Record<string, string | undefined> }).headers?.['authorization'];
-    if (raw !== `Bearer ${apiToken}`) return { status: 401, body: { error: 'unauthorized' } };
-    return handler(ctx);
-  };
 }
 
 async function loadEngine() {
@@ -54,7 +46,7 @@ async function loadEngine() {
   return new mod.MediaEngine({ providers: { transcription, tts, image: [], vision: [] } });
 }
 
-export function buildVoiceRoutes(apiToken: string | undefined): readonly Route[] {
+export function buildVoiceRoutes(auth: AuthMiddleware): readonly Route[] {
   let engine: Awaited<ReturnType<typeof loadEngine>> | undefined;
   const getEngine = async () => (engine ??= await loadEngine());
 
@@ -120,7 +112,7 @@ export function buildVoiceRoutes(apiToken: string | undefined): readonly Route[]
   };
 
   return [
-    { method: 'POST', path: '/api/voice/transcribe', handler: requireBearer(apiToken, transcribe) },
-    { method: 'POST', path: '/api/voice/synthesize', handler: requireBearer(apiToken, synthesize) },
+    { method: 'POST', path: '/api/voice/transcribe', handler: auth(transcribe) },
+    { method: 'POST', path: '/api/voice/synthesize', handler: auth(synthesize) },
   ];
 }

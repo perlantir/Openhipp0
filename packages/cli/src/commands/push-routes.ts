@@ -11,6 +11,7 @@
  */
 
 import type { Route } from '@openhipp0/bridge';
+import type { AuthMiddleware } from './api-auth.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -18,15 +19,6 @@ import os from 'node:os';
 interface RouteContext {
   req: unknown;
   body?: unknown;
-}
-
-function requireBearer(apiToken: string | undefined, handler: Route['handler']): Route['handler'] {
-  if (!apiToken) return handler;
-  return async (ctx) => {
-    const raw = (ctx.req as { headers?: Record<string, string | undefined> }).headers?.['authorization'];
-    if (raw !== `Bearer ${apiToken}`) return { status: 401, body: { error: 'unauthorized' } };
-    return handler(ctx);
-  };
 }
 
 function registryPath(): string {
@@ -51,7 +43,7 @@ async function writeRegistry(
   await fs.writeFile(p, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-export function buildPushRoutes(apiToken: string | undefined): readonly Route[] {
+export function buildPushRoutes(auth: AuthMiddleware): readonly Route[] {
   const register: Route['handler'] = async (ctx: RouteContext) => {
     const body = ctx.body as
       | { deviceId?: string; pushToken?: string; platform?: 'ios' | 'android' }
@@ -72,5 +64,5 @@ export function buildPushRoutes(apiToken: string | undefined): readonly Route[] 
     return { body: { ok: true } };
   };
 
-  return [{ method: 'POST', path: '/api/push/register', handler: requireBearer(apiToken, register) }];
+  return [{ method: 'POST', path: '/api/push/register', handler: auth(register) }];
 }
