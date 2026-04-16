@@ -858,6 +858,52 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 26 — Debuggability + launch checklist (`core/debuggability`)
+
+**DECISION:** Structured error codes live in a single registry file, not as metadata on each error class
+
+- REASONING: A central registry means (1) the CLI can list every known code without walking the codebase, (2) docs can auto-generate from the registry, (3) the `HIPP0-XXXX` external numbering stays consistent. Attaching `fix` + `docsUrl` to every error class would either duplicate the strings or force every throw-site to reach for a registry anyway.
+- AFFECTS: `packages/core/src/debuggability/error-codes.ts`; the rule in `CONTRIBUTING.md` is "every new error class gets a registry entry".
+- CONFIDENCE: high.
+
+**DECISION:** Debug bundle is paste-into-issue, not upload-to-server
+
+- REASONING: Per scope doc. The project runs no infrastructure; an upload endpoint would require us to run a log ingest, handle PII, deal with GDPR. Pasting a redacted JSON payload into a GitHub issue is slower for the user but keeps our operational surface at zero.
+- AFFECTS: `debuggability/bundle.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Redaction is aggressive — false positives are preferred over leaks
+
+- REASONING: The cost of leaking an API key is much higher than the cost of redacting a benign config field. Every redaction labels the kind (`<REDACTED:anthropic-key>`, `<REDACTED:field>`) so operators can sanity-check after the fact. The env-secret rule uses a lookbehind to redact only the value, leaving the key name visible for context.
+- AFFECTS: `redactor.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Verbose mode is an emitter, not a direct stderr write
+
+- REASONING: Dashboard live-view, test assertions, and dev-mode logging all want the same events in different sinks. An emitter with an in-memory history buffer (default 500) lets consumers subscribe per their output format. `formatVerbose(event)` gives the canonical one-line string for stderr; the dashboard can still render the structured event.
+- AFFECTS: `verbose.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Community infra ships as repo files, not as a hosted service (Discord / forum deferred)
+
+- REASONING: Per scope doc. Repo-side files (CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, issue + PR templates, RFC template adopted from Rust) are what matters for day-one launch. Discord / forum happen when adoption materializes.
+- AFFECTS: Root repo files + `.github/`.
+- CONFIDENCE: high.
+
+**DECISION:** `scripts/launch-checklist.sh` is a single Bash runner that runs every gate; CI mirrors it
+
+- REASONING: Single script with declarative gates (build / typecheck / lint / test / python / playwright / docker / audit) means a release cut is "run this and read the summary" instead of copy-pasting 6 commands. Both CI and a human on a laptop run the same flow.
+- AFFECTS: `scripts/launch-checklist.sh`.
+- CONFIDENCE: high.
+
+**DECISION:** Multi-language docs + bug bounty + paid pen test + 30-day no-leak run explicitly **cut** from v1
+
+- REASONING: Per scope doc. Multi-language docs burn a small team; community translations as they come. Bug bounty creates legal + financial exposure without a sponsor. Paid pen test is budget-bound; community review + `pnpm audit` is the v1 floor. 30-day no-leak run is not CI-runnable.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
 ### Phase 25 — Offline mode (`core/offline`)
 
 **DECISION:** Generalize mobile's sync primitives into `core/offline`; mobile keeps its vendored copy until opportunistic migration
