@@ -24,6 +24,11 @@
 
 import type { ContentBlock, Message, ToolDef, ToolUseBlock } from '../llm/types.js';
 import type { ExecutionContext } from '../tools/types.js';
+import {
+  assessOutcomeAsync,
+  buildRevisionInstruction,
+  maybeCritique,
+} from '../reflection/runtime-hook.js';
 import { buildSystemPrompt } from './prompt-builder.js';
 import {
   NoopMemoryAdapter,
@@ -84,6 +89,9 @@ export class AgentRuntime {
     let finalStopReason = 'other';
     let stoppedReason: StoppedReason = 'other';
     let consecutiveErrorIterations = 0;
+    let lastToolResultsHadError = false;
+    let revisionsApplied = 0;
+    let hadToolCallsThisTurn = false;
 
     while (iteration < maxIter) {
       iteration++;
@@ -117,9 +125,37 @@ export class AgentRuntime {
 
       if (toolUses.length === 0) {
         stoppedReason = resp.stopReason === 'end_turn' ? 'end_turn' : 'llm_stop_reason';
+
+        // Reflection hook — rubric always runs; LLM critique only if gated in.
+        // maxRevisions defaults to 1 so this loop makes at most one extra pass.
+        if (stoppedReason === 'end_turn' && this.config.reflection) {
+          const decision = await maybeCritique({
+            adapter: this.config.reflection.adapter,
+            config: this.config.reflection.config,
+            agent: this.config.agent,
+            userMessage: request.message,
+            draft: finalText,
+            messages,
+            hadToolCalls: hadToolCallsThisTurn,
+            lastToolResultsHadError,
+            revisionsUsed: revisionsApplied,
+            projectId: this.config.projectId,
+            turnIndex: iteration,
+          });
+          if (decision.apply && decision.critique) {
+            revisionsApplied++;
+            messages.push({
+              role: 'user',
+              content: [buildRevisionInstruction(decision.critique)],
+            });
+            stoppedReason = 'other';
+            continue;
+          }
+        }
         break;
       }
 
+      hadToolCallsThisTurn = true;
       const toolResultBlocks: ContentBlock[] = [];
       let anyError = false;
       for (const tu of toolUses) {
@@ -145,6 +181,7 @@ export class AgentRuntime {
         });
       }
       messages.push({ role: 'tool', content: toolResultBlocks });
+      lastToolResultsHadError = anyError;
 
       consecutiveErrorIterations = anyError ? consecutiveErrorIterations + 1 : 0;
       if (consecutiveErrorIterations >= TOOL_ERROR_CASCADE_THRESHOLD) {
@@ -173,6 +210,22 @@ export class AgentRuntime {
       stoppedReason,
     });
 
+    // Async outcome assessment — never blocks the reply. Fire-and-forget.
+    if (this.config.reflection) {
+      assessOutcomeAsync({
+        adapter: this.config.reflection.adapter,
+        config: this.config.reflection.config,
+        projectId: this.config.projectId,
+        agentId: this.config.agent.id,
+        turnIndex: iteration,
+        request: {
+          agent: this.config.agent,
+          prevAssistantText: finalText,
+          nextSignal: { kind: 'session-ended' },
+        },
+      });
+    }
+
     return {
       text: finalText,
       messages,
@@ -183,6 +236,7 @@ export class AgentRuntime {
       stoppedReason,
       startedAt,
       finishedAt,
+      ...(revisionsApplied > 0 && { revisionsApplied }),
     };
   }
 

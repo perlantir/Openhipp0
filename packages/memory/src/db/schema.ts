@@ -266,6 +266,44 @@ export type SessionHistory = typeof sessionHistory.$inferSelect;
 export type NewSessionHistory = typeof sessionHistory.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Reflection events — Phase B1
+//
+// Row-per-event audit log for agent self-critique + outcome assessment. The
+// runtime's `ReflectionAdapter` is where events originate; `persist` on the
+// ReflectionConfig writes here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const reflectionEvents = sqliteTable(
+  'reflection_events',
+  {
+    id: id(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    sessionId: text('session_id'),
+    turnIndex: integer('turn_index').notNull(),
+    kind: text('kind', { enum: ['critique', 'outcome'] }).notNull(),
+    rubricIssues: text('rubric_issues', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    llmInvoked: integer('llm_invoked', { mode: 'boolean' }).notNull().default(false),
+    critiqueScore: real('critique_score'),
+    accept: integer('accept', { mode: 'boolean' }),
+    revisionApplied: integer('revision_applied', { mode: 'boolean' }).notNull().default(false),
+    outcomeScore: real('outcome_score'),
+    reason: text('reason'),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    projectAgentIdx: index('reflection_events_project_agent_idx').on(t.projectId, t.agentId),
+    kindIdx: index('reflection_events_kind_idx').on(t.kind),
+    sessionIdx: index('reflection_events_session_idx').on(t.sessionId),
+  }),
+);
+
+export type ReflectionEvent = typeof reflectionEvents.$inferSelect;
+export type NewReflectionEvent = typeof reflectionEvents.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // User Modeling
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -15,6 +15,13 @@
       "when": 1776369599080,
       "tag": "0001_military_swordsman",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1776392000000,
+      "tag": "0002_reflection_events",
+      "breakpoints": true
     }
   ]
 }

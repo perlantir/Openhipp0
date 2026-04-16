@@ -87,6 +87,9 @@ export * as offline from './offline/index.js';
 /** Phase 26 — Debuggability: structured error codes, debug bundle redactor, verbose agent trace. */
 export * as debuggability from './debuggability/index.js';
 
+/** Phase B1 — Reflection: rubric-gated self-critique + async outcome assessment. */
+export * as reflection from './reflection/index.js';
+
 // Ergonomic top-level re-exports for consumers (e2e, SDK).
 export {
   toJsonl,
