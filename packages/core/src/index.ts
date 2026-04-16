@@ -90,6 +90,9 @@ export * as debuggability from './debuggability/index.js';
 /** Phase B1 — Reflection: rubric-gated self-critique + async outcome assessment. */
 export * as reflection from './reflection/index.js';
 
+/** Phase B6 — MCP server marketplace: signed bundles + posture diff + install ledger. */
+export * as mcpMarketplace from './mcp-marketplace/index.js';
+
 /** Phase B2 — Planning: complexity gate + evidence-validated step tracker. */
 export * as planning from './planning/index.js';
 
