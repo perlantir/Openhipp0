@@ -6,45 +6,72 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-test:
-    name: Build / Lint / Typecheck / Test
+  # ── Node workspaces ────────────────────────────────────────────────────
+  node:
+    name: TypeScript build + test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
-    # Phase 1d+ will add a Postgres service here for DB integration tests.
-    # For now, unit tests run against SQLite or mocks only.
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.33.0
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: pnpm
+          node-version: '22'
+          cache: 'pnpm'
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
+      - run: pnpm -r build
 
-      - name: Typecheck
-        run: pnpm typecheck
+      - run: pnpm -r typecheck
 
-      - name: Test
-        run: pnpm test
+      - run: pnpm -r lint
 
-      - name: Build
-        run: pnpm build
+      - run: pnpm -r test
+
+      - run: pnpm test:e2e
+
+  # ── Python SDK ─────────────────────────────────────────────────────────
+  python:
+    name: Python SDK tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install & test
+        run: ./scripts/test-python.sh
+
+  # ── Docker build ───────────────────────────────────────────────────────
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    needs: [node]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: openhipp0:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

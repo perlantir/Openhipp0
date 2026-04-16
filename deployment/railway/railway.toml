@@ -1,0 +1,18 @@
+# Railway deployment template.
+# Create a Railway project, plug in this repo, and Railway will use the
+# Dockerfile at the repo root. The Postgres plugin supplies DATABASE_URL.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node /app/packages/cli/bin/hipp0.js serve"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Recommended plugins:
+#   - PostgreSQL (sets DATABASE_URL automatically)
+#   - Redis       (future rate-limiting, not required today)

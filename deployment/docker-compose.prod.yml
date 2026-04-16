@@ -1,0 +1,49 @@
+# Production docker-compose for Open Hipp0.
+# Runs the @openhipp0 runtime alongside Postgres 17 + pgvector. Both services
+# persist their state under named volumes so the stack can be stopped + started
+# without data loss.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hipp0
+      POSTGRES_USER: hipp0
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - hipp0_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hipp0']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  hipp0:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ghcr.io/openhipp0/openhipp0:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://hipp0:${POSTGRES_PASSWORD}@postgres:5432/hipp0
+      HIPP0_PORT: 3100
+      HIPP0_HOST: 0.0.0.0
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - '3100:3100'
+    volumes:
+      - hipp0_home:/home/hipp0/.hipp0
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(\"http://127.0.0.1:3100/health\").then(r => process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  hipp0_pg:
+  hipp0_home:

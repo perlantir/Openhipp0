@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/coverage
+**/.turbo
+**/.cache
+**/.vscode
+**/.idea
+.git
+.github
+docs
+python-sdk
+benchmarks
+deployment
+**/*.log
+**/tmp
+**/*.md
+!README.md
