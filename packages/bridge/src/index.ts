@@ -1,5 +1,13 @@
 // @openhipp0/bridge — Messaging platform connectors (Discord, Telegram, Slack, Web, CLI)
-// Phase 1c stub. Real exports land in later phases.
+//
+// Phase 3a: interface + reliability primitives (types, reconnect, queue).
+// Phase 3b: CLI + Web bridges.
+// Phase 3c: Discord, Telegram, Slack bridges.
+// Phase 3d: Unified Gateway.
 
 export const packageName = '@openhipp0/bridge' as const;
 export const version = '0.0.0' as const;
+
+export * from './types.js';
+export { ReconnectSupervisor, type ReconnectConfig, type ReconnectState } from './reconnect.js';
+export { OutboundQueue, type OutboundQueueConfig, type QueuedOutbound } from './queue.js';
