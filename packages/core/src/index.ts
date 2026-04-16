@@ -84,6 +84,9 @@ export * as backup from './backup/index.js';
 /** Phase 25 — Offline mode primitives (outbound queue, conflict resolver, cache-first, local-LLM stub). */
 export * as offline from './offline/index.js';
 
+/** Phase 26 — Debuggability: structured error codes, debug bundle redactor, verbose agent trace. */
+export * as debuggability from './debuggability/index.js';
+
 // Ergonomic top-level re-exports for consumers (e2e, SDK).
 export {
   toJsonl,
