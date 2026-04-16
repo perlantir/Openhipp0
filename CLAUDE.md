@@ -858,6 +858,47 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase 24 — Cloud backup + restore (`core/backup`)
+
+**DECISION:** Per-table AES-256-GCM blobs + separately-encrypted manifest, not a single monolithic ciphertext
+
+- REASONING: A single blob means the whole backup has to decrypt before anything can be inspected. Per-table blobs (each with its own salt + nonce) mean: (1) tampering with one table doesn't fail the entire restore, (2) selective restore is possible without a schema change, (3) S3 listings never leak table names because the manifest is separately encrypted. Matches the `credential-vault.ts` shape already proven in Phase 9.
+- ALTERNATIVES_REJECTED: One giant blob — saves a handful of bytes, costs recovery flexibility.
+- AFFECTS: `BackupArtifact`, `encryptJson`.
+- CONFIDENCE: high.
+
+**DECISION:** Round-trip integrity check after create + checksum match before apply
+
+- REASONING: A corrupted write surfaces inside createBackup (we decrypt + re-checksum each blob before handing to the backend), not days later during restore. Restore re-verifies the per-table checksum against the manifest before calling the sink — same content-addressed guarantee as the marketplace installer.
+- AFFECTS: `createBackup`, `restoreBackup`.
+- CONFIDENCE: high.
+
+**DECISION:** DataSource + DataSink are caller-supplied interfaces, not direct Drizzle adapters
+
+- REASONING: The backup module must live in `core` (so `cli` can import it) but the actual table schemas live in `memory`. Structural source/sink interfaces let the CLI wire a memory-package-aware adapter; tests wire in-memory fakes. Identical pattern to Phase 2f MemoryAdapter.
+- AFFECTS: `orchestrator.ts`. CLI wiring of a real `memoryDataSource`/`memoryDataSink` follows in the next touch.
+- CONFIDENCE: high.
+
+**DECISION:** Two backends in v1 (local + S3-compatible). Google Drive / Dropbox / hosted "Open Hipp0 Cloud" cut
+
+- REASONING: Per scope doc. Local covers sneakernet + external-drive deploys. S3-compatible covers AWS + Backblaze B2 + Cloudflare R2 + Wasabi + MinIO with one adapter because the API is well-defined. Google Drive / Dropbox require per-provider OAuth churn for one more storage choice. Hosted cloud is out of scope — the project runs no infrastructure.
+- AFFECTS: `backends.ts` has `createLocalBackend` + `createS3Backend`.
+- CONFIDENCE: high.
+
+**DECISION:** S3Client is a structural interface, not `@aws-sdk/client-s3`
+
+- REASONING: The full AWS SDK is ~10 MB and pulls in all regions. Operators choose their own client (AWS SDK v3, `minio`, `@aws-sdk/client-s3`, custom fetch-based wrapper) and pass it in. Test suite exercises the full adapter without any real SDK.
+- AFFECTS: `S3Client` interface, `createS3Backend`.
+- CONFIDENCE: high.
+
+**DECISION:** Daily-full snapshots + S3 lifecycle rules for retention. Incremental / BIP-39 cut
+
+- REASONING: Per scope doc. SQLite page-level deltas are hard to get right across schema migrations; daily full + S3 lifecycle (expire objects older than 30d) is simpler and survives restore corner cases. BIP-39 recovery phrases are dangerous UX (lose the phrase → data bricked) — documentation will say "key loss = data loss" instead of implying recovery.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
 ### Phase 23 — Skills marketplace (`core/skills/marketplace`)
 
 **DECISION:** Skill bundles are JSON envelopes, not tarballs

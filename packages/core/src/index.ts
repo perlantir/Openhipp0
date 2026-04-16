@@ -78,6 +78,9 @@ export * as enterprise from './enterprise/index.js';
 /** Training data pipeline: trajectory export, batch runner, compression (Phase 15). */
 export * as training from './training/index.js';
 
+/** Phase 24 — AES-256-GCM encrypted backup + restore (local + S3-compatible). */
+export * as backup from './backup/index.js';
+
 // Ergonomic top-level re-exports for consumers (e2e, SDK).
 export {
   toJsonl,
