@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   createMemoryDedupStore,
+  defaultTrustFor,
   hashContent,
   ingestItem,
   looksDecisionBearing,
@@ -8,6 +9,7 @@ import {
   type DistilleryHooks,
   type SyncOptions,
   type SyncReport,
+  type TrustLevel,
 } from '../../src/connectors/types.js';
 import { NotionConnector } from '../../src/connectors/notion.js';
 import { LinearConnector } from '../../src/connectors/linear.js';
@@ -17,12 +19,12 @@ import { ConfluenceConnector } from '../../src/connectors/confluence.js';
 
 function stubDistillery(): DistilleryHooks & {
   facts: string[];
-  decisions: Array<{ title: string; sourceUrl: string }>;
-  memories: string[];
+  decisions: Array<{ title: string; sourceUrl: string; trust: TrustLevel }>;
+  memories: Array<{ text: string; trust: TrustLevel }>;
 } {
   const facts: string[] = [];
-  const decisions: Array<{ title: string; sourceUrl: string }> = [];
-  const memories: string[] = [];
+  const decisions: Array<{ title: string; sourceUrl: string; trust: TrustLevel }> = [];
+  const memories: Array<{ text: string; trust: TrustLevel }> = [];
   return {
     facts,
     decisions,
@@ -31,11 +33,11 @@ function stubDistillery(): DistilleryHooks & {
       return text.split('\n').filter((s) => s.startsWith('- '));
     },
     async createDecision(input) {
-      decisions.push({ title: input.title, sourceUrl: input.sourceUrl });
+      decisions.push({ title: input.title, sourceUrl: input.sourceUrl, trust: input.trust });
       return { id: `d-${decisions.length}` };
     },
-    async storeMemory(text) {
-      memories.push(text);
+    async storeMemory(text, opts) {
+      memories.push({ text, trust: opts.trust });
     },
   };
 }
@@ -321,6 +323,93 @@ describe('ConfluenceConnector', () => {
     expect(report.ingested).toBe(1);
     expect(dist.decisions[0]?.sourceUrl).toContain('/wiki/x/p1');
     // Stripped HTML — no angle brackets in the recorded memory text.
-    expect(dist.memories.every((m) => !m.includes('<strong>'))).toBe(true);
+    expect(dist.memories.every((m) => !m.text.includes('<strong>'))).toBe(true);
+  });
+});
+
+// ─── Trust tagging (Retro-B) ──────────────────────────────────────────────
+
+describe('source tagging + quarantine', () => {
+  const base: Omit<ConnectorItem, 'source' | 'trust' | 'contentHash'> = {
+    sourceUrl: 'https://x/y',
+    externalId: 'x',
+    title: 'We decided to migrate to Postgres',
+    body: 'Because RLS is a hard requirement.',
+    updatedAt: '2026-04-16T00:00:00Z',
+  };
+
+  it('defaultTrustFor maps known sources correctly', () => {
+    expect(defaultTrustFor('notion')).toBe('medium');
+    expect(defaultTrustFor('linear')).toBe('medium');
+    expect(defaultTrustFor('slack')).toBe('low');
+    expect(defaultTrustFor('github-pr')).toBe('medium');
+    expect(defaultTrustFor('confluence')).toBe('medium');
+    expect(defaultTrustFor('custom')).toBe('untrusted');
+  });
+
+  it('medium-trust item promotes to a decision when text looks decision-bearing', async () => {
+    const dist = stubDistillery();
+    const opts: SyncOptions = { dedupStore: createMemoryDedupStore(), distillery: dist };
+    const report: SyncReport = { source: 'notion', fetched: 0, ingested: 0, skippedDuplicate: 0, errors: [] };
+    await ingestItem(
+      { ...base, source: 'notion', contentHash: hashContent(base.title, base.body) },
+      opts,
+      report,
+    );
+    expect(dist.decisions).toHaveLength(1);
+    expect(dist.decisions[0]?.trust).toBe('medium');
+  });
+
+  it('low-trust item (Slack default) is quarantined — stored but never a decision', async () => {
+    const dist = stubDistillery();
+    const opts: SyncOptions = { dedupStore: createMemoryDedupStore(), distillery: dist };
+    const report: SyncReport = { source: 'slack', fetched: 0, ingested: 0, skippedDuplicate: 0, errors: [] };
+    await ingestItem(
+      { ...base, source: 'slack', contentHash: hashContent(base.title, base.body) },
+      opts,
+      report,
+    );
+    expect(dist.decisions).toHaveLength(0);
+    expect(dist.memories).toHaveLength(1);
+    expect(dist.memories[0]?.trust).toBe('low');
+  });
+
+  it('explicit trust=untrusted override wins over source default', async () => {
+    const dist = stubDistillery();
+    const opts: SyncOptions = { dedupStore: createMemoryDedupStore(), distillery: dist };
+    const report: SyncReport = { source: 'notion', fetched: 0, ingested: 0, skippedDuplicate: 0, errors: [] };
+    await ingestItem(
+      {
+        ...base,
+        source: 'notion',
+        trust: 'untrusted',
+        contentHash: hashContent(base.title, base.body),
+      },
+      opts,
+      report,
+    );
+    expect(dist.decisions).toHaveLength(0);
+    expect(dist.memories[0]?.trust).toBe('untrusted');
+  });
+
+  it('passes trust through to extractFacts callers', async () => {
+    const extracted: TrustLevel[] = [];
+    const dist: DistilleryHooks = {
+      async extractFacts(_text, src) {
+        extracted.push(src.trust);
+        return ['- one'];
+      },
+      async storeMemory() {
+        // no-op — we just want the trust signal on extractFacts
+      },
+    };
+    const opts: SyncOptions = { dedupStore: createMemoryDedupStore(), distillery: dist };
+    const report: SyncReport = { source: 'slack', fetched: 0, ingested: 0, skippedDuplicate: 0, errors: [] };
+    await ingestItem(
+      { ...base, source: 'slack', contentHash: hashContent(base.title, base.body) },
+      opts,
+      report,
+    );
+    expect(extracted).toEqual(['low']);
   });
 });

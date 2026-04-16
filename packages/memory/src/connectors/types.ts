@@ -12,6 +12,41 @@ import crypto from 'node:crypto';
 
 export type ConnectorSource = 'notion' | 'linear' | 'slack' | 'github-pr' | 'confluence' | 'custom';
 
+/**
+ * Trust level on ingested content. Phase 21 (prompt-injection defense)
+ * reads this to decide whether an item can promote into a decision or
+ * fed back as instructions to the agent.
+ *
+ *   high       — authored inside a trusted system by an authenticated user
+ *                (e.g. an internal Notion page in a restricted workspace).
+ *   medium     — default for most internal-but-mutable systems (Linear,
+ *                Confluence, GitHub PRs).
+ *   low        — chat / collaborative content that may contain outside
+ *                messages (Slack channels, Discord, email-to-ticket).
+ *   untrusted  — feeds that explicitly include third-party / public input
+ *                (public Slack community, email inbox, web scrape).
+ *
+ * Low + untrusted items are quarantined: they get stored for recall but
+ * never auto-promote into decisions, never feed back into the agent's
+ * system prompt.
+ */
+export type TrustLevel = 'high' | 'medium' | 'low' | 'untrusted';
+
+export function defaultTrustFor(source: ConnectorSource): TrustLevel {
+  switch (source) {
+    case 'slack':
+      return 'low';
+    case 'notion':
+    case 'linear':
+    case 'github-pr':
+    case 'confluence':
+      return 'medium';
+    case 'custom':
+    default:
+      return 'untrusted';
+  }
+}
+
 export interface ConnectorItem {
   source: ConnectorSource;
   /** Canonical URL of the source page/issue/thread — used for dedup. */
@@ -29,6 +64,13 @@ export interface ConnectorItem {
   /** Raw content hash over (title + body) for change-detection on re-sync. */
   contentHash: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Trust level for Phase 21 (prompt-injection defense). Optional — falls
+   * back to `defaultTrustFor(source)` when omitted. Connector instances
+   * can downgrade (e.g. a "public community Slack" connector sets
+   * trust='untrusted') but should never upgrade defaults.
+   */
+  trust?: TrustLevel;
 }
 
 export function hashContent(title: string, body: string): string {
@@ -57,16 +99,24 @@ export function createMemoryDedupStore(): ConnectorDedupStore & { seen: Map<stri
  * connectors package depends only on core types. Wiring at the app layer. */
 export interface DistilleryHooks {
   /** Extract factual statements from a block of text. Return empty to skip. */
-  extractFacts?(text: string, source: { url: string; kind: ConnectorSource }): Promise<readonly string[]>;
+  extractFacts?(
+    text: string,
+    source: { url: string; kind: ConnectorSource; trust: TrustLevel },
+  ): Promise<readonly string[]>;
   /** Create a decision record from a high-signal item. */
   createDecision?(input: {
     title: string;
     reasoning: string;
     tags?: readonly string[];
     sourceUrl: string;
+    origin: ConnectorSource;
+    trust: TrustLevel;
   }): Promise<{ id: string }>;
   /** Store a raw memory entry for future recall. */
-  storeMemory?(text: string, tags?: readonly string[]): Promise<void>;
+  storeMemory?(
+    text: string,
+    opts: { tags?: readonly string[]; origin: ConnectorSource; trust: TrustLevel },
+  ): Promise<void>;
 }
 
 export interface SyncOptions {
@@ -102,28 +152,44 @@ export async function ingestItem(
     report.skippedDuplicate += 1;
     return;
   }
+  const trust = item.trust ?? defaultTrustFor(item.source);
+  const quarantined = trust === 'low' || trust === 'untrusted';
+
   try {
     if (distillery.extractFacts) {
       const facts = await distillery.extractFacts(item.body, {
         url: item.sourceUrl,
         kind: item.source,
+        trust,
       });
       if (facts.length > 0 && distillery.storeMemory) {
         for (const f of facts) {
-          await distillery.storeMemory(f, item.tags);
+          await distillery.storeMemory(f, {
+            ...(item.tags !== undefined && { tags: item.tags }),
+            origin: item.source,
+            trust,
+          });
         }
       }
     }
-    // High-signal items (decision-bearing) are surfaced; others land as memory.
-    if (distillery.createDecision && looksDecisionBearing(item)) {
+    // Quarantined content (low / untrusted) never becomes a decision.
+    // It lands as memory with its trust tag preserved so Phase 21 can
+    // gate recall accordingly.
+    if (!quarantined && distillery.createDecision && looksDecisionBearing(item)) {
       await distillery.createDecision({
         title: item.title,
         reasoning: item.body,
         ...(item.tags !== undefined && { tags: item.tags }),
         sourceUrl: item.sourceUrl,
+        origin: item.source,
+        trust,
       });
     } else if (distillery.storeMemory) {
-      await distillery.storeMemory(`${item.title}\n${item.body}`, item.tags);
+      await distillery.storeMemory(`${item.title}\n${item.body}`, {
+        ...(item.tags !== undefined && { tags: item.tags }),
+        origin: item.source,
+        trust,
+      });
     }
     await dedupStore.remember(item);
     report.ingested += 1;

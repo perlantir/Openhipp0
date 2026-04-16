@@ -11,6 +11,27 @@ export type TranscriptionInput =
   | { kind: 'buffer'; data: Uint8Array; filename: string; mimeType?: string }
   | { kind: 'path'; path: string; mimeType?: string };
 
+/**
+ * Emitted after each MediaEngine call so Phase 22 (cost optimization) can
+ * bill audio minutes + TTS characters + image generations alongside LLM
+ * tokens. `costUsd` is the caller's best estimate using the provider's
+ * list prices; callers can leave it 0 when pricing is unknown and the
+ * consumer computes it from raw units.
+ */
+export interface MediaCostEvent {
+  capability: 'transcription' | 'tts' | 'image-generation' | 'vision';
+  provider: string;
+  /** Transcription: seconds of audio. TTS: characters. */
+  units: number;
+  unitLabel: 'seconds' | 'characters' | 'images' | 'tokens';
+  costUsd: number;
+  timestamp: string;
+  /** Optional agent / session tag for attribution. */
+  agentId?: string;
+}
+
+export type MediaCostSink = (event: MediaCostEvent) => void | Promise<void>;
+
 export interface TranscriptionResult {
   text: string;
   /** ISO 639-1 code when the provider detects it. */
