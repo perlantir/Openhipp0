@@ -14,7 +14,20 @@
 // Identity
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type Platform = 'discord' | 'telegram' | 'slack' | 'whatsapp' | 'web' | 'cli';
+export type Platform =
+  | 'discord'
+  | 'telegram'
+  | 'slack'
+  | 'whatsapp'
+  | 'whatsapp-business'
+  | 'web'
+  | 'cli'
+  | 'signal'
+  | 'matrix'
+  | 'mattermost'
+  | 'email'
+  | 'sms'
+  | 'home-assistant';
 
 export interface BridgeUser {
   /** Platform-scoped user id. */
