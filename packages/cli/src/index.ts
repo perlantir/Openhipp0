@@ -9,7 +9,7 @@
 import { Command } from 'commander';
 import { runInit, nodePrompt } from './commands/init.js';
 import { runConfigGet, runConfigSet } from './commands/config.js';
-import { runStart, runStatus, runStop } from './commands/lifecycle.js';
+import { runRestart, runStart, runStatus, runStop } from './commands/lifecycle.js';
 import { runServe } from './commands/serve.js';
 import { runDoctor } from './commands/doctor.js';
 import {
@@ -49,7 +49,7 @@ export {
 export type { FileSystem } from './config.js';
 export { runInit, nodePrompt };
 export { runConfigGet, runConfigSet };
-export { runStart, runStatus, runStop };
+export { runStart, runStatus, runStop, runRestart };
 export { runServe } from './commands/serve.js';
 // Retro-A/C surface — exported so e2e tests + downstream packages can
 // wire the unified auth middleware, pairing routes, and RLS middleware
@@ -184,10 +184,29 @@ export function createProgram(): Command {
 
   program
     .command('start')
-    .description('start the hipp0 daemon (Phase 8)')
+    .description('start the hipp0 daemon (detached child, writes ~/.hipp0/hipp0.pid)')
+    .option('-p, --port <port>', 'listen port (forwarded to `hipp0 serve`)')
+    .option('--with-ws', 'attach a WebBridge on /ws (forwarded to `hipp0 serve`)', false)
+    .option('--with-api', 'mount /api/* (forwarded to `hipp0 serve`)', false)
+    .option('--api-token <token>', 'bearer token (forwarded to `hipp0 serve`)')
+    .action(async (opts: { port?: string; withWs?: boolean; withApi?: boolean; apiToken?: string }) => {
+      const global = program.opts<CliOptions>();
+      const args: string[] = [];
+      if (opts.port) args.push('--port', opts.port);
+      if (opts.withWs) args.push('--with-ws');
+      if (opts.withApi) args.push('--with-api');
+      if (opts.apiToken) args.push('--api-token', opts.apiToken);
+      const result = await runStart({ args });
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
+
+  program
+    .command('restart')
+    .description('stop + start the hipp0 daemon')
     .action(async () => {
       const global = program.opts<CliOptions>();
-      const result = await runStart();
+      const result = await runRestart();
       emit(result, global);
       process.exit(result.exitCode);
     });
