@@ -25,6 +25,12 @@
 import { desc, eq } from 'drizzle-orm';
 import type { HipppoDb } from '../db/client.js';
 import { skills, type Skill } from '../db/schema.js';
+import {
+  computeSkillReward,
+  DEFAULT_MAX_DAILY_DROP,
+  clampDailyChange,
+  type RewardOptions,
+} from './reward-model.js';
 
 export const DEFAULT_HALF_LIFE_DAYS = 30;
 export const MIN_RECENCY_FLOOR = 0.05;
@@ -117,6 +123,51 @@ export async function listSkillsForRecall(
   ranked.sort((a, b) => b.rank - a.rank);
   const limited = ranked.filter((r) => r.rank >= cutoff).slice(0, opts.limit ?? 10);
   return limited;
+}
+
+/**
+ * Reward-weighted shadow rank. Runs ALONGSIDE `listSkillsForRecall` — it
+ * does NOT replace the primary signal. Promotion to primary should be
+ * gated on a holdout set showing improvement.
+ *
+ * Formula:
+ *   shadowRank = rank × (1 + 0.5 × reward)   // reward ∈ [-1, 1]
+ *   subject to: shadowRank never drops more than 20 % below the primary
+ *               rank in a single day (clampDailyChange).
+ *
+ * If a skill has no feedback, the reward defaults to 0 (Bayesian prior) —
+ * so shadow rank = primary rank. This makes the shadow a superset:
+ * everything in primary is also in shadow, possibly re-ordered.
+ */
+export interface ShadowRankedSkill extends RankedSkill {
+  readonly shadowRank: number;
+  readonly reward: number;
+  readonly globallyTrusted: boolean;
+}
+
+export async function listSkillsForRecallWithReward(
+  db: HipppoDb,
+  projectId: string,
+  opts: ListSkillsForRecallOptions & { maxDailyDrop?: number } & RewardOptions = {},
+): Promise<ShadowRankedSkill[]> {
+  const base = await listSkillsForRecall(db, projectId, opts);
+  const withReward: ShadowRankedSkill[] = [];
+  for (const r of base) {
+    const rewardInfo = await computeSkillReward(db, r.skill.id, opts);
+    // Only apply global reward when trust threshold met — otherwise the
+    // shadow score equals the primary rank.
+    const effectiveReward = rewardInfo.globallyTrusted ? rewardInfo.reward : 0;
+    const raw = r.rank * (1 + 0.5 * effectiveReward);
+    const shadow = clampDailyChange(r.rank, raw, opts.maxDailyDrop ?? DEFAULT_MAX_DAILY_DROP);
+    withReward.push({
+      ...r,
+      reward: effectiveReward,
+      shadowRank: shadow,
+      globallyTrusted: rewardInfo.globallyTrusted,
+    });
+  }
+  withReward.sort((a, b) => b.shadowRank - a.shadowRank);
+  return withReward;
 }
 
 /**

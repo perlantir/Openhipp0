@@ -7,17 +7,36 @@ export interface ChatProps {
   url?: string | null;
   /** Injected WebSocket constructor (tests). */
   webSocketCtor?: typeof WebSocket;
+  /** Project id feedback is attributed to. Default: 'default'. */
+  projectId?: string;
+  /** User id attributed to every rating. Default: 'dashboard-user'. */
+  userId?: string;
+  /** Override the feedback POST target for tests. */
+  feedbackEndpoint?: string;
+  /** Injected fetch (tests). */
+  fetchImpl?: typeof fetch;
 }
 
 interface ChatFrame {
   type: 'message' | 'response' | 'status' | 'button';
   content?: string;
   from?: string;
+  id?: string;
 }
 
+type RatingState = Record<string, 1 | -1 | 0>;
+
 /** Chat — live conversation with the agent via the web bridge. */
-export function Chat({ url, webSocketCtor }: ChatProps) {
+export function Chat({
+  url,
+  webSocketCtor,
+  projectId = 'default',
+  userId = 'dashboard-user',
+  feedbackEndpoint = '/api/feedback',
+  fetchImpl,
+}: ChatProps) {
   const [draft, setDraft] = useState('');
+  const [ratings, setRatings] = useState<RatingState>({});
   const opts: Parameters<typeof useWebSocket<ChatFrame>>[0] = {
     url: url ?? (typeof window === 'undefined' ? null : `ws://${window.location.host}/ws`),
   };
@@ -29,6 +48,30 @@ export function Chat({ url, webSocketCtor }: ChatProps) {
     if (!draft.trim()) return;
     send({ type: 'message', content: draft });
     setDraft('');
+  }
+
+  async function rate(turnKey: string, rating: 1 | -1) {
+    // Rate-limit: one rating per turn. Subsequent clicks on the same thumb
+    // toggle the rating off; clicking the other thumb replaces it.
+    const previous = ratings[turnKey] ?? 0;
+    const next: 1 | -1 | 0 = previous === rating ? 0 : rating;
+    setRatings((s) => ({ ...s, [turnKey]: next }));
+    try {
+      await (fetchImpl ?? fetch)(feedbackEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          userId,
+          turnId: turnKey,
+          rating: next,
+          source: 'explicit',
+        }),
+      });
+    } catch {
+      // Revert on failure so the UI reflects the server's view.
+      setRatings((s) => ({ ...s, [turnKey]: previous }));
+    }
   }
 
   return (
@@ -60,12 +103,51 @@ export function Chat({ url, webSocketCtor }: ChatProps) {
         {messages.length === 0 ? (
           <p className="text-slate-500">No messages yet.</p>
         ) : (
-          messages.map((m, i) => (
-            <div key={i} className="mb-1">
-              <span className="font-semibold">{m.from ?? m.type}:</span>{' '}
-              <span>{m.content ?? ''}</span>
-            </div>
-          ))
+          messages.map((m, i) => {
+            const turnKey = `turn-${i}`;
+            const rating = ratings[turnKey] ?? 0;
+            const isAssistant = m.type === 'response';
+            return (
+              <div key={i} className="mb-2">
+                <div>
+                  <span className="font-semibold">{m.from ?? m.type}:</span>{' '}
+                  <span>{m.content ?? ''}</span>
+                </div>
+                {isAssistant && (
+                  <div className="mt-1 flex gap-1 text-xs text-slate-500">
+                    <button
+                      type="button"
+                      aria-label="Thumbs up"
+                      data-testid={`thumb-up-${i}`}
+                      onClick={() => void rate(turnKey, 1)}
+                      className={
+                        'rounded border px-2 py-0.5 ' +
+                        (rating === 1
+                          ? 'border-green-500 bg-green-50 text-green-700'
+                          : 'border-slate-300 hover:bg-slate-50')
+                      }
+                    >
+                      👍
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Thumbs down"
+                      data-testid={`thumb-down-${i}`}
+                      onClick={() => void rate(turnKey, -1)}
+                      className={
+                        'rounded border px-2 py-0.5 ' +
+                        (rating === -1
+                          ? 'border-red-500 bg-red-50 text-red-700'
+                          : 'border-slate-300 hover:bg-slate-50')
+                      }
+                    >
+                      👎
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </section>
       <form onSubmit={onSend} className="flex gap-2">

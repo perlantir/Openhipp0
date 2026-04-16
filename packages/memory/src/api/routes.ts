@@ -32,7 +32,9 @@ import {
   auditLog as auditLogTable,
   llmUsage as llmUsageTable,
   projects as projectsTable,
+  userFeedback as userFeedbackTable,
 } from '../db/schema.js';
+import { computeSkillReward } from '../learning/reward-model.js';
 
 // ─── route shape (structural; matches @openhipp0/bridge.Route) ───────────
 
@@ -81,6 +83,17 @@ const CreateProjectBody = z.object({
     .regex(/^[A-Za-z0-9_.-]+$/)
     .optional(),
   name: z.string().min(1).max(256),
+});
+
+const FeedbackBody = z.object({
+  projectId: z.string().min(1),
+  userId: z.string().min(1).max(256),
+  sessionId: z.string().min(1).max(256).optional(),
+  turnId: z.string().min(1).max(256).optional(),
+  skillId: z.string().min(1).max(256).optional(),
+  rating: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
+  reason: z.string().max(200).optional(),
+  source: z.enum(['explicit', 'implicit']).default('explicit'),
 });
 
 // ─── factory ─────────────────────────────────────────────────────────────
@@ -328,6 +341,47 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
             byModel: [...byModel.entries()].map(([name, v]) => ({ name, ...v })),
           },
         };
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/feedback',
+      async handler(ctx) {
+        const input = FeedbackBody.parse(ctx.body ?? {});
+        // Rate-limit hint: one rating per (session, turn, user) combo.
+        // Enforcement is per-session; duplicates overwrite the previous row
+        // so late edits are explicit, not accumulated.
+        const values: {
+          projectId: string;
+          userId: string;
+          sessionId?: string;
+          turnId?: string;
+          skillId?: string;
+          rating: number;
+          reason?: string;
+          source: 'explicit' | 'implicit';
+        } = {
+          projectId: input.projectId,
+          userId: input.userId,
+          rating: input.rating,
+          source: input.source,
+          ...(input.sessionId && { sessionId: input.sessionId }),
+          ...(input.turnId && { turnId: input.turnId }),
+          ...(input.skillId && { skillId: input.skillId }),
+          ...(input.reason && { reason: input.reason }),
+        };
+        const [row] = await opts.db.insert(userFeedbackTable).values(values).returning();
+        return { status: 201, body: row };
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/skills/:id/rewards',
+      async handler(ctx) {
+        const skillId = ctx.params['id'];
+        if (!skillId) return { status: 400, body: { error: 'missing :id' } };
+        const reward = await computeSkillReward(opts.db, skillId);
+        return { body: reward };
       },
     },
     {

@@ -29,6 +29,13 @@
       "when": 1776393000000,
       "tag": "0003_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1776394000000,
+      "tag": "0004_user_feedback",
+      "breakpoints": true
     }
   ]
 }

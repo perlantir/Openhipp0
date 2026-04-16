@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Chat } from '../../src/pages/Chat.js';
 
@@ -89,5 +89,86 @@ describe('Chat page', () => {
       );
     });
     expect(screen.getByTestId('chat-log').textContent).toContain('hello back');
+  });
+
+  it('thumbs-up on an assistant turn POSTs to /api/feedback with rating=1', async () => {
+    FakeWebSocket.instances = [];
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true })));
+    render(
+      <MemoryRouter>
+        <Chat
+          url="ws://test/ws"
+          webSocketCtor={FakeWebSocket as unknown as typeof WebSocket}
+          fetchImpl={fetchImpl as unknown as typeof fetch}
+          projectId="p1"
+          userId="tester"
+        />
+      </MemoryRouter>,
+    );
+    act(() => {
+      FakeWebSocket.instances[0]!.simulateOpen();
+      FakeWebSocket.instances[0]!.simulateMessage(
+        JSON.stringify({ type: 'response', content: 'answer', from: 'agent' }),
+      );
+    });
+    const thumb = await screen.findByTestId('thumb-up-0');
+    fireEvent.click(thumb);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    const call = fetchImpl.mock.calls[0]!;
+    expect(call[0]).toBe('/api/feedback');
+    const body = JSON.parse((call[1]?.body as string) ?? '{}') as {
+      projectId: string;
+      userId: string;
+      rating: number;
+      source: string;
+    };
+    expect(body).toMatchObject({ projectId: 'p1', userId: 'tester', rating: 1, source: 'explicit' });
+  });
+
+  it('second click on same thumb toggles rating back to 0', async () => {
+    FakeWebSocket.instances = [];
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response('{}'));
+    render(
+      <MemoryRouter>
+        <Chat
+          url="ws://test/ws"
+          webSocketCtor={FakeWebSocket as unknown as typeof WebSocket}
+          fetchImpl={fetchImpl as unknown as typeof fetch}
+        />
+      </MemoryRouter>,
+    );
+    act(() => {
+      FakeWebSocket.instances[0]!.simulateOpen();
+      FakeWebSocket.instances[0]!.simulateMessage(
+        JSON.stringify({ type: 'response', content: 'x', from: 'agent' }),
+      );
+    });
+    const thumb = await screen.findByTestId('thumb-up-0');
+    fireEvent.click(thumb);
+    fireEvent.click(thumb);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    const second = JSON.parse((fetchImpl.mock.calls[1]![1]?.body as string) ?? '{}') as {
+      rating: number;
+    };
+    expect(second.rating).toBe(0);
+  });
+
+  it('user-turn messages do NOT render thumb buttons', () => {
+    FakeWebSocket.instances = [];
+    render(
+      <MemoryRouter>
+        <Chat
+          url="ws://test/ws"
+          webSocketCtor={FakeWebSocket as unknown as typeof WebSocket}
+        />
+      </MemoryRouter>,
+    );
+    act(() => {
+      FakeWebSocket.instances[0]!.simulateOpen();
+      FakeWebSocket.instances[0]!.simulateMessage(
+        JSON.stringify({ type: 'message', content: 'hi', from: 'me' }),
+      );
+    });
+    expect(screen.queryByTestId('thumb-up-0')).toBeNull();
   });
 });

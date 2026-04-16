@@ -391,6 +391,46 @@ export type PlanRevisionRow = typeof planRevisions.$inferSelect;
 export type NewPlanRevision = typeof planRevisions.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// User feedback — Phase B3
+//
+// Closed-loop preference learning. Every 👍/👎 on an agent turn lands here;
+// the reward model aggregates into a per-skill latent score that factors
+// into skills-rank as a shadow signal.
+//
+// Privacy + hardening:
+//   - rating ∈ {-1, 0, +1}; no free-text content, only a short `reason` tag.
+//   - source: 'explicit' (user click) vs 'implicit' (trajectory-inferred).
+//   - skill_id is nullable so raw turn-level feedback can still flow in.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const userFeedback = sqliteTable(
+  'user_feedback',
+  {
+    id: id(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
+    sessionId: text('session_id'),
+    turnId: text('turn_id'),
+    skillId: text('skill_id'),
+    rating: integer('rating').notNull(),
+    reason: text('reason'),
+    source: text('source', { enum: ['explicit', 'implicit'] }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    projectIdx: index('user_feedback_project_idx').on(t.projectId),
+    skillIdx: index('user_feedback_skill_idx').on(t.skillId),
+    userIdx: index('user_feedback_user_idx').on(t.userId),
+    sessionIdx: index('user_feedback_session_idx').on(t.sessionId),
+  }),
+);
+
+export type UserFeedback = typeof userFeedback.$inferSelect;
+export type NewUserFeedback = typeof userFeedback.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // User Modeling
 // ─────────────────────────────────────────────────────────────────────────────
 

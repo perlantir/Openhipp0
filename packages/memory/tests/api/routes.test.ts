@@ -67,6 +67,39 @@ describe('createApiRoutes', () => {
     expect(second.status).toBe(409);
   });
 
+  it('POST /api/feedback stores a row + GET /api/skills/:id/rewards aggregates', async () => {
+    await seedProject(db, 'p1');
+    const routes = createApiRoutes({ db });
+    const feedback = findRoute(routes, 'POST', '/api/feedback');
+    const r = await call(feedback, {
+      body: {
+        projectId: 'p1',
+        userId: 'u1',
+        skillId: 'sk-1',
+        rating: 1,
+        source: 'explicit',
+      },
+    });
+    expect(r.status).toBe(201);
+    const rewards = findRoute(routes, 'GET', '/api/skills/:id/rewards');
+    const ro = await call(rewards, { params: { id: 'sk-1' } });
+    const body = ro.body as { reward: number; explicit: { n: number } };
+    expect(body.explicit.n).toBe(1);
+    // Single row + prior pulls reward toward 0 but above it.
+    expect(body.reward).toBeGreaterThan(0);
+  });
+
+  it('POST /api/feedback rejects ratings outside {-1, 0, 1}', async () => {
+    await seedProject(db, 'p1');
+    const routes = createApiRoutes({ db });
+    const feedback = findRoute(routes, 'POST', '/api/feedback');
+    await expect(
+      call(feedback, {
+        body: { projectId: 'p1', userId: 'u1', rating: 2, source: 'explicit' },
+      }),
+    ).rejects.toThrow();
+  });
+
   it('GET /api/projects lists all', async () => {
     await seedProject(db, 'one');
     await seedProject(db, 'two');
