@@ -90,6 +90,9 @@ export * as debuggability from './debuggability/index.js';
 /** Phase B1 — Reflection: rubric-gated self-critique + async outcome assessment. */
 export * as reflection from './reflection/index.js';
 
+/** Phase B2 — Planning: complexity gate + evidence-validated step tracker. */
+export * as planning from './planning/index.js';
+
 // Ergonomic top-level re-exports for consumers (e2e, SDK).
 export {
   toJsonl,

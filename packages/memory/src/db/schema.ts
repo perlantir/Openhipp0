@@ -304,6 +304,93 @@ export type ReflectionEvent = typeof reflectionEvents.$inferSelect;
 export type NewReflectionEvent = typeof reflectionEvents.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Plans — Phase B2
+//
+// Explicit plan decomposition + progress tracking. `state` drives the
+// lifecycle (draft / active / paused / completed / abandoned). `steps` live
+// in a child table with FK back to plans.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const plans = sqliteTable(
+  'plans',
+  {
+    id: id(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id'),
+    goal: text('goal').notNull(),
+    state: text('state', {
+      enum: ['draft', 'active', 'paused', 'completed', 'abandoned'],
+    })
+      .notNull()
+      .default('active'),
+    currentStepId: text('current_step_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({
+    projectIdx: index('plans_project_idx').on(t.projectId),
+    stateIdx: index('plans_state_idx').on(t.state),
+  }),
+);
+
+export type Plan = typeof plans.$inferSelect;
+export type NewPlan = typeof plans.$inferInsert;
+
+export const planSteps = sqliteTable(
+  'plan_steps',
+  {
+    id: id(),
+    planId: text('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    parentStepId: text('parent_step_id'),
+    order: integer('order_index').notNull(),
+    description: text('description').notNull(),
+    status: text('status', {
+      enum: ['pending', 'in_progress', 'blocked', 'completed', 'skipped'],
+    })
+      .notNull()
+      .default('pending'),
+    evidence: text('evidence', { mode: 'json' }).$type<Record<string, unknown> | null>(),
+    startedAt: text('started_at'),
+    finishedAt: text('finished_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({
+    planIdx: index('plan_steps_plan_idx').on(t.planId),
+    statusIdx: index('plan_steps_status_idx').on(t.status),
+  }),
+);
+
+export type PlanStepRow = typeof planSteps.$inferSelect;
+export type NewPlanStep = typeof planSteps.$inferInsert;
+
+export const planRevisions = sqliteTable(
+  'plan_revisions',
+  {
+    id: id(),
+    planId: text('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    delta: text('delta', { mode: 'json' })
+      .$type<{ added: string[]; removed: string[] }>()
+      .notNull()
+      .default(sql`'{"added":[],"removed":[]}'`),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    planIdx: index('plan_revisions_plan_idx').on(t.planId),
+  }),
+);
+
+export type PlanRevisionRow = typeof planRevisions.$inferSelect;
+export type NewPlanRevision = typeof planRevisions.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // User Modeling
 // ─────────────────────────────────────────────────────────────────────────────
 

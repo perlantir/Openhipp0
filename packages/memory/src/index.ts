@@ -45,6 +45,9 @@ export type { ApiRoute, ApiRouteContext, ApiRouteResponse, ApiRouteOptions } fro
 /** Phase B1 — persist hook for core's ReflectionAdapter events. */
 export * as reflection from './reflection/index.js';
 
+/** Phase B2 — Drizzle-backed PlanStore. */
+export * as planning from './planning/index.js';
+
 // Top-level re-exports of connector helpers for ergonomic consumer imports.
 export {
   createMemoryDedupStore,
