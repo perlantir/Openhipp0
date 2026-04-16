@@ -18,7 +18,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/ws': { target: hipp0Target, ws: true, changeOrigin: true },
-      '/health': { target: hipp0Target, changeOrigin: true },
+      '/api': { target: hipp0Target, changeOrigin: true },
+      // NB: /health is intentionally NOT proxied — the dashboard has a
+      // React route at /health, and the browser would otherwise bypass
+      // the SPA and see the raw JSON. The Health page fetches /api/health
+      // instead (wired as an alias in hipp0 serve).
     },
   },
 });

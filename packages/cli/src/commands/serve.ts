@@ -51,7 +51,26 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
       apiToken: opts.apiToken ?? process.env['HIPP0_API_TOKEN'],
     });
     const configRoutes = buildConfigRoutes(opts.apiToken ?? process.env['HIPP0_API_TOKEN']);
-    routeTable = [...built.routes, ...configRoutes];
+    // /api/health aliases /health so browsers can reach it through the
+    // dashboard's /api/* proxy (the root /health can't be proxied without
+    // shadowing the React Router route of the same name).
+    const healthAlias: Route = {
+      method: 'GET',
+      path: '/api/health',
+      handler: () => ({
+        body: {
+          status: 'ok',
+          checks: [],
+          uptime: process.uptime(),
+          version: process.env['npm_package_version'] ?? '0.0.0',
+          features: {
+            api: enableApi,
+            ws: opts.withWs ?? envFlag(process.env['HIPP0_WITH_WS']),
+          },
+        },
+      }),
+    };
+    routeTable = [...built.routes, ...configRoutes, healthAlias];
     closeDb = built.close;
   }
 

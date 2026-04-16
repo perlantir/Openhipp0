@@ -176,7 +176,9 @@ function formatUptime(seconds: number): string {
 }
 
 async function defaultFetchHealth(): Promise<HealthReport> {
-  const resp = await fetch('/health');
+  // /api/health aliases /health so the dashboard proxy picks it up without
+  // colliding with the React Router /health route.
+  const resp = await fetch('/api/health');
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as HealthReport;
 }
