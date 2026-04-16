@@ -27,7 +27,12 @@ import {
   type DecisionStatus,
 } from '../decisions/index.js';
 import { searchSessions, escapeFts5 } from '../recall/index.js';
-import { skills as skillsTable, auditLog as auditLogTable, llmUsage as llmUsageTable } from '../db/schema.js';
+import {
+  skills as skillsTable,
+  auditLog as auditLogTable,
+  llmUsage as llmUsageTable,
+  projects as projectsTable,
+} from '../db/schema.js';
 
 // ─── route shape (structural; matches @openhipp0/bridge.Route) ───────────
 
@@ -68,6 +73,16 @@ const UpdateDecisionBody = z.object({
   status: z.enum(['active', 'superseded', 'rejected']).optional(),
 });
 
+const CreateProjectBody = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_.-]+$/)
+    .optional(),
+  name: z.string().min(1).max(256),
+});
+
 // ─── factory ─────────────────────────────────────────────────────────────
 
 export interface ApiRouteOptions {
@@ -88,6 +103,42 @@ export interface ApiRouteOptions {
 
 export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
   const routes: ApiRoute[] = [
+    {
+      method: 'POST',
+      path: '/api/projects',
+      async handler(ctx) {
+        try {
+          const input = CreateProjectBody.parse(ctx.body ?? {});
+          const values: { id?: string; name: string } = { name: input.name };
+          if (input.id) values.id = input.id;
+          const [row] = await opts.db.insert(projectsTable).values(values).returning();
+          return { status: 201, body: row };
+        } catch (err) {
+          // Collapse unique / FK violations into 409 rather than leaking DB text.
+          const msg = (err as Error).message ?? '';
+          if (/UNIQUE|SQLITE_CONSTRAINT|duplicate/i.test(msg)) {
+            return { status: 409, body: { error: 'project already exists' } };
+          }
+          throw err;
+        }
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/projects',
+      async handler() {
+        const rows = await opts.db
+          .select({
+            id: projectsTable.id,
+            name: projectsTable.name,
+            createdAt: projectsTable.createdAt,
+          })
+          .from(projectsTable)
+          .orderBy(desc(projectsTable.createdAt))
+          .limit(500);
+        return { body: rows };
+      },
+    },
     {
       method: 'POST',
       path: '/api/decisions',

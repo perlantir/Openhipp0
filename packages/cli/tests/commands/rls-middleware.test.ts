@@ -36,11 +36,19 @@ describe('buildRlsMiddleware', () => {
     expect(db.calls).toHaveLength(0);
   });
 
-  it('noop when db resolves to null (SQLite deployment)', async () => {
+  it('rejects agent-key caller when db is null (SQLite default = fail-closed)', async () => {
     const rls = buildRlsMiddleware({ getDb: () => null });
     const handler = rls(async () => ({ body: { ok: true } }));
-    await handler(ctx({ kind: 'agent-key', organizationId: 'org-a' }));
-    // Didn't throw; still returned response.
+    const res = await handler(ctx({ kind: 'agent-key', organizationId: 'org-a' }));
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ error: expect.stringMatching(/multi-tenant|isolation/i) as unknown });
+  });
+
+  it('flows through for agent-key on SQLite when rejectAgentKeyWithoutRls=false (opt-in)', async () => {
+    const rls = buildRlsMiddleware({ getDb: () => null, rejectAgentKeyWithoutRls: false });
+    const handler = rls(async () => ({ body: { ok: true } }));
+    const res = await handler(ctx({ kind: 'agent-key', organizationId: 'org-a' }));
+    expect(res).toEqual({ body: { ok: true } });
   });
 
   it('sets tenant + project + user session vars for agent-key callers', async () => {

@@ -32,6 +32,51 @@ describe('createApiRoutes', () => {
     await runMigrations(db);
   });
 
+  it('POST /api/projects creates a project and returns 201', async () => {
+    const routes = createApiRoutes({ db });
+    const create = findRoute(routes, 'POST', '/api/projects');
+    const r = await call(create, { body: { id: 'alpha', name: 'Alpha' } });
+    expect(r.status).toBe(201);
+    const p = r.body as { id: string; name: string };
+    expect(p.id).toBe('alpha');
+    expect(p.name).toBe('Alpha');
+  });
+
+  it('POST /api/projects auto-generates id when not supplied', async () => {
+    const routes = createApiRoutes({ db });
+    const create = findRoute(routes, 'POST', '/api/projects');
+    const r = await call(create, { body: { name: 'Autogen' } });
+    expect(r.status).toBe(201);
+    const p = r.body as { id: string; name: string };
+    expect(p.id).toBeTruthy();
+    expect(p.name).toBe('Autogen');
+  });
+
+  it('POST /api/projects rejects invalid id chars', async () => {
+    const routes = createApiRoutes({ db });
+    const create = findRoute(routes, 'POST', '/api/projects');
+    await expect(call(create, { body: { id: 'bad id', name: 'x' } })).rejects.toThrow();
+  });
+
+  it('POST /api/projects returns 409 on duplicate id', async () => {
+    const routes = createApiRoutes({ db });
+    const create = findRoute(routes, 'POST', '/api/projects');
+    const first = await call(create, { body: { id: 'dup', name: 'First' } });
+    expect(first.status).toBe(201);
+    const second = await call(create, { body: { id: 'dup', name: 'Second' } });
+    expect(second.status).toBe(409);
+  });
+
+  it('GET /api/projects lists all', async () => {
+    await seedProject(db, 'one');
+    await seedProject(db, 'two');
+    const routes = createApiRoutes({ db });
+    const list = findRoute(routes, 'GET', '/api/projects');
+    const r = await call(list);
+    const rows = r.body as Array<{ id: string }>;
+    expect(rows.map((x) => x.id).sort()).toEqual(['one', 'two']);
+  });
+
   it('POST /api/decisions creates + returns 201', async () => {
     await seedProject(db, 'p1');
     const routes = createApiRoutes({ db });
