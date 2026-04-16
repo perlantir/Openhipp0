@@ -30,3 +30,6 @@ export * as recall from './recall/index.js';
 
 /** @openhipp0/core MemoryAdapter implementation that wires all the above together. */
 export * as adapter from './adapter/index.js';
+
+/** External-platform connectors (Notion / Linear / Slack / GitHub-PR / Confluence) — Phase 16. */
+export * as connectors from './connectors/index.js';
