@@ -45,6 +45,12 @@ export type {
   ToolUseBlock,
 } from './llm/index.js';
 
+/** Skills engine: manifest validation, loader with precedence, registry. */
+export * as skills from './skills/index.js';
+
+/** Security: agent policy enforcement, templates, execution governance. */
+export * as security from './security/index.js';
+
 // Runtime classes consumed by external packages (memory adapter, SDK).
 export { AgentRuntime } from './agent/index.js';
 export { LLMClient } from './llm/index.js';
