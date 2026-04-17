@@ -1075,6 +1075,89 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `adapters/telegram.ts` — no change to `telegram.ts`. `parseCallbackQuery` is extracted as a named function so the grammY `Context` type dependency lives at exactly one boundary; the adapter's `onCallbackQuery` handler accepts either `ParsedCallbackQuery` (test-friendly) or a full `Context` (production grammY handler).
 - CONFIDENCE: high.
 
+### Phase G2-b adapters — PR #10 Discord
+
+**DECISION 10-A:** `maxMessageBytes = 2000` (UTF-8 byte budget approximating Discord's 2000-code-unit cap)
+
+- REASONING: Discord's 2000-character cap is measured in UTF-16 code units (matching JS `.length`), same JS-native semantics as Telegram's 4096. Per-class loss when treating a 2000-byte budget as a code-unit approximation:
+  - **ASCII:** 0% loss (1 byte = 1 code unit, breaks even).
+  - **BMP ≥ U+0800 (CJK / most non-Latin):** up to ~67% loss (3 bytes per 1 code unit, conservative early rotation). The only real loss path.
+  - **Supplementary plane (emoji, math symbols):** 0% loss (4 bytes per 2 surrogate halves, breaks even). Emoji-heavy content is fine.
+  All cases rotate at-or-before Discord's cutoff, never over.
+- ALTERNATIVES_REJECTED: `2000 × 4` (unsafe overshoot for ASCII); add a `unit:` knob to `rotateOnOverflow` (only Telegram/Discord need it, byte-mode already correct).
+- AFFECTS: `adapters/discord.ts` `DISCORD_CHAR_CAP = 2000`.
+- CONFIDENCE: high.
+
+**DECISION 10-B:** No `finalFormatEdit` hook for Discord
+
+- REASONING: Discord accepts standard markdown (`*bold*`, `_italic_`, `` `code` ``, `[text](url)`) during streaming edits — no `parse_mode` handshake. `StreamingAccumulator`'s output already matches Discord's renderer expectations. Omitting `finalFormatEdit` from `sessionOptions()` lets the session skip the terminal re-edit entirely; explicit UX win — no mid-stream plain-text + final-reformat flicker as in Telegram.
+- ALTERNATIVES_REJECTED: Identity `finalFormatEdit` (wasted round-trip per terminal event); upgrade to a rich embed on `done` (fights DECISION 10-C's embed-on-tool-call-only policy).
+- AFFECTS: `adapters/discord.ts` `sessionOptions()` return omits `finalFormatEdit`. Test #16 asserts `'finalFormatEdit' in opts === false`.
+- CONFIDENCE: high.
+
+**DECISION 10-C:** Approval UI = separate message with embed + ActionRow, NOT an embed on the streaming message
+
+- REASONING: Two options were possible — (a) mutate the streaming message into an embed + buttons; (b) post a new message alongside the stream. Telegram (PR #9) posts a new prompt; Discord could go either way. Mutating the stream message would (1) destroy the streaming-edit message id mid-stream, (2) require restoring plain text after approval (another edit), (3) couple two orthogonal concerns. Posting a distinct message via `channel.send({ embeds, components })` keeps the stream message untouched and matches typical Discord bot UX where approval dialogs are distinct affordances.
+- ALTERNATIVES_REJECTED: Mutate streaming message (destroys continuity + requires post-decision restore); use modal (`InteractionCreate → showModal`, doesn't fit the preview→tap pattern).
+- AFFECTS: `adapters/discord.ts` `approvalResolver()` posts via `channel.send`; the streaming-edit target message is never touched by the approval flow.
+- CONFIDENCE: medium. If operators want inline-embed approvals, a future option flips this; start with the safe default.
+
+**DECISION 10-D:** `onInteraction` accepts either a full `Interaction` or a parsed `{customId, update}` shape, discriminated by a named guard
+
+- REASONING: PR #9 review lesson #3 — discriminate via a named guard, not inline `'field' in x` checks. discord.js's `Interaction` type is a wide union (`ChatInputCommandInteraction | ButtonInteraction | …`); tests shouldn't have to construct a full `ButtonInteraction` (huge surface). `ParsedInteraction = { customId, update }` is the narrow shape the adapter actually consumes; `isParsedInteraction(x)` discriminates via `!('isButton' in x)` (every `Interaction` subtype has the method; the parsed shape doesn't). Production wires `client.on('interactionCreate', adapter.onInteraction)` and the full `Interaction` flows through `parseButtonInteraction`. Non-button interactions + foreign customIds parse to `null` and are silently ignored.
+- ALTERNATIVES_REJECTED: Tests construct real `ButtonInteraction` (huge surface); duck-type in each handler (repeats PR #9's mistake); adapter owns an intake dispatcher (out of scope).
+- AFFECTS: `adapters/discord.ts` `ParsedInteraction`, `isParsedInteraction`, `parseButtonInteraction`, `onInteraction`.
+- CONFIDENCE: high.
+
+**DECISION 10-E:** Error classifier returns a discriminated union `ClassifiedError`
+
+- REASONING: PR #9 review lesson #2 — `classifyTelegramError` returns `StreamingEditError | 'absorb' | null`; callers `instanceof`-check and special-case the string. Awkward. `classifyDiscordError(err): ClassifiedError` where `ClassifiedError = { kind: 'classified'; error } | { kind: 'absorb' } | { kind: 'unknown' }`. Every call site becomes `switch (result.kind)` — exhaustive, no `instanceof` checks, no `null` sentinels.
+- ALTERNATIVES_REJECTED: Mirror Telegram exactly (perpetuates PR #9's pattern); throw-then-catch narrowing (loses the `'absorb'` case).
+- AFFECTS: `adapters/discord.ts` `classifyDiscordError`, `ClassifiedError`, both call sites in `#editFn` + `#sendFn`.
+- CONFIDENCE: high.
+
+**DECISION 10-F:** Error code mapping + `'absorb'` is a dead branch retained for cross-bridge `switch` parity
+
+- REASONING (mapping): discord.js surfaces errors through three classes:
+  - `RateLimitError` → `rate-limit`, `retryAfterMs = err.retryAfter` (discord.js exposes ms — do NOT × 1000; this is a correction over the original plan which asserted seconds).
+  - `DiscordAPIError` code in `{10003 Unknown Channel, 10008 Unknown Message, 50001 Missing Access, 50013 Missing Permissions}` → `permanent`.
+  - `DiscordAPIError` status `401` / `403` / `404` → `permanent`.
+  - `DiscordAPIError` status `429` → `rate-limit` (rare path where the SDK's auto-retry surfaced a 429 as a plain `DiscordAPIError`; `retry_after` on `rawError` is in seconds per Discord JSON spec, so × 1000 here).
+  - `DiscordAPIError` other 5xx → `transient`.
+  - `HTTPError` 401/403/404 → `permanent`; 5xx → `transient`.
+  - `Error` with `code` in `{ECONNRESET, ETIMEDOUT, ENETUNREACH, EAI_AGAIN}` → `transient`.
+  - any other `Error` → `transient` (safe default, matches PR #9 philosophy).
+  - non-Error throw → `{kind:'unknown'}` (caller rethrows original).
+- REASONING (absorb): Discord has no known error that classifies as `'absorb'` — editing to identical content is a no-op success, not an error. The branch is retained in the union type for parity with Telegram's classifier so downstream callers can use a single `switch (result.kind)` pattern regardless of bridge. In practice, `classifyDiscordError` never returns `{kind:'absorb'}`. **Test #23 enforces this invariant** by iterating every fixture in `__fixtures__/discord-errors.json` and asserting `kind !== 'absorb'`. New fixture additions can't silently start exercising the absorb path.
+- ALTERNATIVES_REJECTED: Omit `'absorb'` from Discord's union (small type drift, bigger downstream cognitive cost); collapse `HTTPError` / `DiscordAPIError` handling (loses permanent-vs-transient distinction).
+- AFFECTS: `adapters/discord.ts` `classifyDiscordError`, fixtures in `__fixtures__/discord-errors.json`, invariant test #23.
+- CONFIDENCE: medium on the fine-grained code-to-kind mapping (real workload tunes); high on the absorb-as-dead-branch decision.
+
+**DECISION 10-G:** Debounce default = 200ms
+
+- REASONING: Discord's guild-level rate limit (50 edits/sec → 20ms minimum spacing) is ~50× looser than Telegram's 1/sec/chat. 200ms = 5 edits/sec — plenty of headroom for backoff under the rate-limit path, still responsive to the eye.
+- ALTERNATIVES_REJECTED: 100ms (too aggressive for spiky turns); 500ms (leaves Discord's advantage on the table).
+- AFFECTS: `adapters/discord.ts` `DEFAULT_DEBOUNCE_MS = 200`. Test #16 asserts.
+- CONFIDENCE: high.
+
+**DECISION 10-H:** UX defaults for the Discord approval flow (locked in plan, not implementation discretion)
+
+- **H1 — Embed richness: MINIMAL.** `setTitle('Tool call: ' + toolName)` + `setDescription(summarizeArgsForApproval(preview.args))`. No color, no fields. The embed is a visual distinguisher from ordinary messages, not a rich-presentation surface. Operator positioning is away from consumer chat UI. The summary uses **top-level KEYS only** (`Argument keys: to, subject, body`), never values — args may contain secrets (API keys, recipient PII, tokens). The 200-char truncation prevents huge arg sets from blowing past Discord's embed limits.
+  - ALTERNATIVES_REJECTED for richness: Yellow color + multiple fields (consumery; encourages bikeshedding); title-only (loses the args preview).
+  - ALTERNATIVES_REJECTED for summary: `JSON.stringify` + truncate (leaks secrets if they fit in 200 chars); per-tool whitelist (requires tool-side metadata we don't have yet).
+- **H2 — Ack visibility: via `interaction.update({ components: [] })`.** One call serves both "ack so the user doesn't see an interaction-failed banner" and "remove the buttons so they can't be tapped again." Errors on the ack are swallowed — a failed strip doesn't change the approval outcome.
+  - NOTE: The plan called for ephemeral acks specifically. The implemented surface uses `update` (visible) rather than `update + ephemeral: true` because `interaction.update` on a button rewrites the prompt message itself; ephemeral is an attribute of `reply()`, not `update()`. Practical effect is the same — the buttons disappear after a tap, no lingering "active button" UI. If operators want a separate ephemeral confirmation reply alongside the strip, that's an additive future option.
+- **H3 — Channel resolution: LAZY, memoized.** `#channelPromise: Promise<TextBasedChannel> | null`. Constructor stays sync. First call to `sendFn`/`approvalResolver` triggers `client.channels.fetch(channelId)` and caches the promise; subsequent calls reuse the resolved channel. Adapter survives transient outages. If the fetch itself fails, the error routes through `classifyDiscordError` via the surrounding try/catch.
+  - ALTERNATIVES_REJECTED: Async constructor (anti-pattern); eager fetch (throws on bad id at wiring time, bad for adapter instantiation in tests/DI); `client.channels.cache.get()` only (cache may be cold, returns undefined silently).
+- AFFECTS: `adapters/discord.ts` embed builder, `onInteraction` ack call, `#getChannel`.
+- CONFIDENCE: high (H1 + H3); medium (H2 — ephemeral revisit if operators want a separate confirmation reply).
+
+**DECISION (test-only probe):** `_debugPendingCount(): number` exposed on the adapter
+
+- REASONING: Late-tap-doesn't-leak (the promise/Map lifecycle behavior PR #9 also relies on) is structurally untestable via the public API alone — a leaked resolver wouldn't cause observable test failure until GC pressure. Exposing the in-flight count via an underscore-prefixed `@internal` method gives Test #21 a deterministic probe: count goes 0 → 1 → 0 → 0 across the approval lifecycle and a late tap with the same `customId`.
+- AFFECTS: `adapters/discord.ts` `_debugPendingCount()`. Underscore + `@internal` JSDoc signal test-only contract; not re-exported from `adapters/index.ts`.
+- CONFIDENCE: high.
+
 ---
 
 ## Coding Standards
