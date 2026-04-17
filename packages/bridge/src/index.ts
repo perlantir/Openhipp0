@@ -80,3 +80,12 @@ export {
   type MediaEnrichmentOptions,
   type AttachmentFetcher,
 } from './media.js';
+
+// G2: streaming adapter + sentence chunker for edit-less bridges.
+export {
+  formatStreamEvent,
+  SentenceChunker,
+  StreamingAccumulator,
+  type ChunkedEmitOpts,
+  type StreamingBridgeDeps,
+} from './streaming.js';

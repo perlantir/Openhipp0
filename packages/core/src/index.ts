@@ -16,6 +16,9 @@ export * as tools from './tools/index.js';
 /** Agent runtime loop. */
 export * as agent from './agent/index.js';
 
+/** Streaming-first runtime + event protocol (G2). */
+export * as streaming from './streaming/index.js';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Top-level re-exports — the handful of types that cross package boundaries
 // (memory package's MemoryAdapter implementation, external SDK consumers).
