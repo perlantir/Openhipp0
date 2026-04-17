@@ -30,8 +30,8 @@ describe('buildAgentMessageHandler', () => {
     delete process.env['ANTHROPIC_API_KEY'];
     delete process.env['OPENAI_API_KEY'];
     try {
-      const handler = await buildAgentMessageHandler({ db });
-      expect(handler).toBeUndefined();
+      const built = await buildAgentMessageHandler({ db });
+      expect(built).toBeUndefined();
     } finally {
       if (prev.a) process.env['ANTHROPIC_API_KEY'] = prev.a;
       if (prev.o) process.env['OPENAI_API_KEY'] = prev.o;
@@ -39,7 +39,7 @@ describe('buildAgentMessageHandler', () => {
   });
 
   it('routes WS messages through a stubbed LLM provider and replies with the provider output', async () => {
-    const handler = await buildAgentMessageHandler({
+    const built = await buildAgentMessageHandler({
       db,
       forceProviders: [{ type: 'anthropic', model: 'fake-model' }],
       providerFactory: () => ({
@@ -66,16 +66,16 @@ describe('buildAgentMessageHandler', () => {
         },
       } as never),
     });
-    expect(handler).toBeDefined();
+    expect(built).toBeDefined();
 
-    const out = await handler!(mkIncoming('hello world'));
+    const out = await built!.handler(mkIncoming('hello world'));
     expect(out).toBeDefined();
     expect(out!.text).toBe('agent saw: hello world');
   });
 
   it('keeps per-channel conversation history across turns', async () => {
     const sawHistory: string[][] = [];
-    const handler = await buildAgentMessageHandler({
+    const built = await buildAgentMessageHandler({
       db,
       forceProviders: [{ type: 'anthropic', model: 'fake-model' }],
       providerFactory: () => ({
@@ -103,9 +103,9 @@ describe('buildAgentMessageHandler', () => {
       } as never),
     });
 
-    await handler!(mkIncoming('first'));
-    await handler!(mkIncoming('second'));
-    await handler!(mkIncoming('third'));
+    await built!.handler(mkIncoming('first'));
+    await built!.handler(mkIncoming('second'));
+    await built!.handler(mkIncoming('third'));
 
     // First call: agent saw only 'first' as the user turn.
     expect(sawHistory[0]).toEqual(['first']);
@@ -117,7 +117,7 @@ describe('buildAgentMessageHandler', () => {
   });
 
   it('surface agent errors as an inline reply instead of crashing the handler', async () => {
-    const handler = await buildAgentMessageHandler({
+    const built = await buildAgentMessageHandler({
       db,
       forceProviders: [{ type: 'anthropic', model: 'fake-model' }],
       providerFactory: () => ({
@@ -132,13 +132,13 @@ describe('buildAgentMessageHandler', () => {
       } as never),
     });
 
-    const out = await handler!(mkIncoming('hi'));
+    const out = await built!.handler(mkIncoming('hi'));
     expect(out).toBeDefined();
     expect(out!.text).toMatch(/agent error/i);
   });
 
   it('auto-creates the project row on first call (no FK error)', async () => {
-    const handler = await buildAgentMessageHandler({
+    const built = await buildAgentMessageHandler({
       db,
       projectId: 'auto-created-proj',
       forceProviders: [{ type: 'anthropic', model: 'fake-model' }],
@@ -159,8 +159,51 @@ describe('buildAgentMessageHandler', () => {
         },
       } as never),
     });
-    await handler!(mkIncoming('hi'));
+    await built!.handler(mkIncoming('hi'));
     const rows = await db.select().from(memory.db.projects);
     expect(rows.map((r) => r.id)).toContain('auto-created-proj');
+  });
+
+  it('exposes reloadProviders that hot-swaps the LLM ladder at runtime', async () => {
+    const calls: { msg: string; model: string }[] = [];
+    const makeProvider = (model: string) => ({
+      name: `fake-${model}`,
+      model,
+      async chatSync(messages: Message[]) {
+        const last = messages[messages.length - 1];
+        const text =
+          typeof last?.content === 'string'
+            ? last.content
+            : (last?.content as { type: string; text?: string }[] | undefined)?.find(
+                (b) => b.type === 'text',
+              )?.text ?? '';
+        calls.push({ msg: text, model });
+        return {
+          content: [{ type: 'text' as const, text: `${model}:${text}` }],
+          stopReason: 'end_turn' as const,
+          usage: { inputTokens: 1, outputTokens: 1 },
+          model,
+          provider: `fake-${model}`,
+        };
+      },
+      async *chat() {
+        /* unused */
+      },
+    });
+    const built = await buildAgentMessageHandler({
+      db,
+      forceProviders: [{ type: 'anthropic', model: 'm1' }],
+      providerFactory: (cfg) => makeProvider(cfg.model) as never,
+    });
+    expect(built).toBeDefined();
+
+    const first = await built!.handler(mkIncoming('before'));
+    expect(first!.text).toBe('m1:before');
+
+    built!.reloadProviders([{ type: 'anthropic', model: 'm2' }]);
+
+    const second = await built!.handler(mkIncoming('after'));
+    expect(second!.text).toBe('m2:after');
+    expect(calls.map((c) => c.model)).toEqual(['m1', 'm2']);
   });
 });

@@ -52,9 +52,21 @@ export interface BuildAgentHandlerOptions {
 
 export type AgentMessageHandler = (msg: IncomingMessage) => Promise<OutgoingMessage | undefined>;
 
+/**
+ * Handle returned by `buildAgentMessageHandler`. Exposes the message handler
+ * plus a `reloadProviders` closure so `POST /api/config/llm` can hot-swap the
+ * LLM ladder without restarting the daemon (LLMClient.reloadConfig atomically
+ * replaces the slots; in-flight calls finish on the old ladder).
+ */
+export interface AgentRuntimeHandle {
+  handler: AgentMessageHandler;
+  reloadProviders: (next: readonly ProviderConfig[]) => void;
+  llmClient: LLMClient;
+}
+
 export async function buildAgentMessageHandler(
   opts: BuildAgentHandlerOptions,
-): Promise<AgentMessageHandler | undefined> {
+): Promise<AgentRuntimeHandle | undefined> {
   const providers = opts.forceProviders ?? inferProvidersFromEnv();
   if (providers.length === 0) return undefined; // no LLM wired → caller falls back
 
@@ -81,6 +93,9 @@ export async function buildAgentMessageHandler(
     {},
     opts.providerFactory,
   );
+  const reloadProviders = (next: readonly ProviderConfig[]): void => {
+    llm.reloadConfig(next);
+  };
 
   const adapter = new memory.adapter.Hipp0MemoryAdapter({ db: opts.db });
   const registry = new ToolRegistry();
@@ -104,7 +119,7 @@ export async function buildAgentMessageHandler(
   const conversations = new Map<string, Message[]>();
   const MAX_TURNS_KEPT = 20;
 
-  return async (msg: IncomingMessage): Promise<OutgoingMessage | undefined> => {
+  const handler: AgentMessageHandler = async (msg) => {
     const channelId = msg.channel.id;
     const history = conversations.get(channelId) ?? [];
     try {
@@ -143,6 +158,62 @@ export async function buildAgentMessageHandler(
       };
     }
   };
+
+  return { handler, reloadProviders, llmClient: llm };
+}
+
+/**
+ * Resolve the provider ladder from a snapshot of env + config.json's `llm`
+ * section. Models from config override the env-var defaults. Used by
+ * `POST /api/config/llm` after it writes the new key/provider/model, so the
+ * reload reflects everything we just persisted.
+ */
+export function inferProvidersFromState(opts: {
+  env: NodeJS.ProcessEnv;
+  configLlm?: { provider?: 'anthropic' | 'openai' | 'ollama'; model?: string };
+}): readonly ProviderConfig[] {
+  const out: ProviderConfig[] = [];
+  const preferred = opts.configLlm?.provider;
+  const preferredModel = opts.configLlm?.model;
+  const pushAnthropic = (): void => {
+    if (!opts.env['ANTHROPIC_API_KEY']) return;
+    out.push({
+      type: 'anthropic',
+      model:
+        (preferred === 'anthropic' && preferredModel) ||
+        opts.env['HIPP0_ANTHROPIC_MODEL'] ||
+        'claude-sonnet-4-6',
+    });
+  };
+  const pushOpenAI = (): void => {
+    if (!opts.env['OPENAI_API_KEY']) return;
+    out.push({
+      type: 'openai',
+      model:
+        (preferred === 'openai' && preferredModel) ||
+        opts.env['HIPP0_OPENAI_MODEL'] ||
+        'gpt-4o-mini',
+    });
+  };
+  const pushOllama = (): void => {
+    if (preferred !== 'ollama') return;
+    out.push({
+      type: 'ollama',
+      model: preferredModel ?? opts.env['HIPP0_OLLAMA_MODEL'] ?? 'llama3.1',
+    });
+  };
+  if (preferred === 'ollama') {
+    pushOllama();
+    pushAnthropic();
+    pushOpenAI();
+  } else if (preferred === 'openai') {
+    pushOpenAI();
+    pushAnthropic();
+  } else {
+    pushAnthropic();
+    pushOpenAI();
+  }
+  return out;
 }
 
 /**

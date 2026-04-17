@@ -29,7 +29,21 @@ import { buildWidgetsRoutes } from './widgets-routes.js';
 import { buildApiAuth, type ApiKeyResolver, type AuthMiddleware } from './api-auth.js';
 import { buildRlsMiddleware, chainMiddleware, type RlsDb } from './rls-middleware.js';
 import { buildPairingRoutes } from './pairing-routes.js';
-import { buildAgentMessageHandler, type AgentMessageHandler } from './build-agent.js';
+import {
+  buildAgentMessageHandler,
+  inferProvidersFromState,
+  type AgentMessageHandler,
+} from './build-agent.js';
+import { defaultEnvPath, upsertEnvKey } from '../env-writer.js';
+import type { llm } from '@openhipp0/core';
+import { z } from 'zod';
+type ProviderConfig = llm.ProviderConfig;
+
+const UpdateLlmBody = z.object({
+  provider: z.enum(['anthropic', 'openai', 'ollama']),
+  apiKey: z.string().min(8).max(512).optional(),
+  model: z.string().min(1).max(128).optional(),
+});
 
 export interface ServeOptions {
   port?: number;
@@ -90,7 +104,9 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
       }),
     });
     const auth = chainMiddleware(baseAuth, rls);
-    const configRoutes = buildConfigRoutes(auth);
+    const configRoutes = buildConfigRoutes(auth, {
+      agentReloadProviders: built.agentReloadProviders,
+    });
     // /api/health aliases /health so browsers can reach it through the
     // dashboard's /api/* proxy (the root /health can't be proxied without
     // shadowing the React Router route of the same name).
@@ -246,14 +262,36 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
  * Scheduler / Agents / Settings pages have something to render. We sanitize
  * by dropping anything under `llm.apiKey`-like fields even though the
  * current config schema doesn't store them (future-proofing).
+ *
+ * Also mounts `POST /api/config/llm` — dashboard / mobile use this to
+ * rotate the API key + switch provider/model at runtime. The handler
+ * persists the key to `.env` (mode 600) and non-secret fields to
+ * `config.json`, then calls the injected `agentReloadProviders` hook so
+ * in-flight providers hot-swap without a daemon restart.
  */
-function buildConfigRoutes(auth: AuthMiddleware): readonly Route[] {
+export interface ConfigRouteOptions {
+  agentReloadProviders?: (next: readonly ProviderConfig[]) => void;
+  /** Override for tests — defaults to the live .env + config paths. */
+  paths?: {
+    configPath?: string;
+    envPath?: string;
+  };
+  /** Override for tests — defaults to real process.env. */
+  env?: NodeJS.ProcessEnv;
+}
+
+export function buildConfigRoutes(
+  auth: AuthMiddleware,
+  routeOpts: ConfigRouteOptions = {},
+): readonly Route[] {
   const wrap = auth;
 
   const loadConfig = async (): Promise<Record<string, unknown>> => {
     const { readConfig } = await import('../config.js');
-    const cfg = (await readConfig()) as unknown as Record<string, unknown>;
-    // Defensive redact — only fields we know are safe ship out.
+    const cfgPath = routeOpts.paths?.configPath;
+    const cfg = (await (cfgPath
+      ? readConfig(cfgPath)
+      : readConfig())) as unknown as Record<string, unknown>;
     return sanitizeConfig(cfg);
   };
 
@@ -277,6 +315,77 @@ function buildConfigRoutes(auth: AuthMiddleware): readonly Route[] {
       handler: wrap(async () => {
         const cfg = await loadConfig();
         return { body: cfg['cronTasks'] ?? [] };
+      }),
+    },
+    {
+      method: 'POST',
+      path: '/api/config/llm',
+      handler: wrap(async (ctx) => {
+        const parsed = UpdateLlmBody.safeParse(ctx.body ?? {});
+        if (!parsed.success) {
+          return {
+            status: 400,
+            body: {
+              error: 'invalid body',
+              issues: parsed.error.issues.map((i) => ({
+                path: i.path.join('.'),
+                message: i.message,
+              })),
+            },
+          };
+        }
+        const { provider, apiKey, model } = parsed.data;
+
+        // Persist non-secret fields to config.json.
+        const { readConfig, writeConfig, defaultConfigPath } = await import(
+          '../config.js'
+        );
+        const cfgPath = routeOpts.paths?.configPath ?? defaultConfigPath();
+        const cfg = await readConfig(cfgPath);
+        const nextCfg = {
+          ...cfg,
+          llm: {
+            provider,
+            ...(model !== undefined ? { model } : cfg.llm?.model ? { model: cfg.llm.model } : {}),
+          },
+        };
+        await writeConfig(nextCfg, cfgPath);
+
+        // Persist secret to .env (mode 600). Anthropic + OpenAI have keys;
+        // Ollama does not (local runtime — ignore any apiKey sent for it).
+        const env = routeOpts.env ?? process.env;
+        const envPath = routeOpts.paths?.envPath ?? defaultEnvPath();
+        let apiKeyUpdated = false;
+        if (apiKey && (provider === 'anthropic' || provider === 'openai')) {
+          const keyName = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+          await upsertEnvKey(envPath, keyName, apiKey);
+          env[keyName] = apiKey;
+          apiKeyUpdated = true;
+        }
+
+        // Hot-swap the live LLMClient if one is wired.
+        if (routeOpts.agentReloadProviders) {
+          const next = inferProvidersFromState({ env, configLlm: nextCfg.llm });
+          if (next.length > 0) {
+            try {
+              routeOpts.agentReloadProviders(next);
+            } catch (err) {
+              return {
+                status: 500,
+                body: { error: 'reload failed', detail: (err as Error).message },
+              };
+            }
+          }
+        }
+
+        return {
+          body: {
+            ok: true,
+            llm: nextCfg.llm,
+            apiKeyUpdated,
+            hotSwapped: Boolean(routeOpts.agentReloadProviders),
+          },
+        };
       }),
     },
   ];
@@ -337,6 +446,7 @@ async function buildApiRoutes(opts: {
   routes: Route[];
   close: () => void;
   rawDb: unknown;
+  agentReloadProviders: ((next: readonly ProviderConfig[]) => void) | undefined;
 }> {
   const memory = await import('@openhipp0/memory');
   const client = memory.db.createClient(
@@ -347,9 +457,11 @@ async function buildApiRoutes(opts: {
   // Build an agent handler for POST /api/v1/agent/chat if a provider key is
   // in the env — otherwise the route returns 501 (honest: no agent wired).
   let agentHandler: import('@openhipp0/memory').ApiRouteOptions['agentHandler'];
+  let agentReloadProviders: ((next: readonly ProviderConfig[]) => void) | undefined;
   if (process.env['ANTHROPIC_API_KEY'] || process.env['OPENAI_API_KEY']) {
     const built = await buildAgentMessageHandler({ db: client });
     if (built) {
+      agentReloadProviders = built.reloadProviders;
       agentHandler = async (req) => {
         const syntheticMsg: IncomingMessage = {
           platform: 'web',
@@ -360,7 +472,7 @@ async function buildApiRoutes(opts: {
           timestamp: Date.now(),
           platformData: { frameType: 'message' },
         };
-        const resp = await built(syntheticMsg);
+        const resp = await built.handler(syntheticMsg);
         return {
           text: resp?.text ?? '',
           messages: [],
@@ -381,6 +493,7 @@ async function buildApiRoutes(opts: {
     routes: routes as unknown as Route[],
     close: () => memory.db.closeClient(client),
     rawDb: (client as unknown as { $client: unknown }).$client,
+    agentReloadProviders,
   };
 }
 
@@ -417,7 +530,8 @@ async function maybeBuildAgent(): Promise<AgentMessageHandler | undefined> {
         ? { databaseUrl: process.env['HIPP0_DATABASE_URL'] }
         : undefined,
     );
-    return await buildAgentMessageHandler({ db: client });
+    const built = await buildAgentMessageHandler({ db: client });
+    return built?.handler;
   } catch (err) {
     process.stderr.write(
       `agent auto-wiring failed: ${err instanceof Error ? err.message : String(err)} — falling back to echo.\n`,
