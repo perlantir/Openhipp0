@@ -145,9 +145,13 @@ export function isParsedInteraction(x: unknown): x is ParsedInteraction {
  * for non-button interactions (chat-input, autocomplete, modal-submit, etc.)
  * and for malformed inputs. Isolated so tests don't have to construct a
  * full discord.js `ButtonInteraction`.
+ *
+ * Contract: accepts only a discord.js `Interaction` (with `isButton()`).
+ * Callers holding an already-parsed shape should dispatch via
+ * `isParsedInteraction` first — see `onInteraction` for the canonical
+ * routing. Passing a `ParsedInteraction` directly here returns `null`.
  */
 export function parseButtonInteraction(input: unknown): ParsedInteraction | null {
-  if (isParsedInteraction(input)) return input;
   if (typeof input !== 'object' || input === null) return null;
   const i = input as Partial<ButtonInteraction> & { isButton?: () => boolean };
   if (typeof i.isButton !== 'function' || !i.isButton()) return null;
@@ -405,6 +409,9 @@ export class DiscordEditStreamingAdapter {
         case 'classified':
           throw c.error;
         case 'absorb':
+          // DECISION 10-F: unreachable per invariant (test #23). Falls
+          // through to silent success if the invariant ever breaks,
+          // matching Telegram absorb semantics for consistency.
           return;
         case 'unknown':
           throw err;
@@ -423,9 +430,15 @@ export class DiscordEditStreamingAdapter {
         case 'classified':
           throw c.error;
         case 'absorb':
-          // Unreachable in practice (see ClassifiedError JSDoc) but
-          // exhaustive switches keep the discriminant honest.
-          return '';
+          // DECISION 10-F: Discord has no known error that classifies
+          // as absorb. If this fires, the classifier has drifted and
+          // the invariant (test #23) is broken. Fail loudly rather
+          // than silently emitting a bogus message id — a downstream
+          // editFn('', text) call would paper over the failure.
+          throw new Error(
+            `[DiscordEditStreamingAdapter] sendFn hit absorb branch — ` +
+              `DECISION 10-F invariant violated. Original error: ${String(err)}`,
+          );
         case 'unknown':
           throw err;
       }

@@ -393,4 +393,21 @@ describe('classifyDiscordError invariant', () => {
       ).not.toBe('absorb');
     }
   });
+
+  // DECISION 10-H3: channel-fetch failures route through classifyDiscordError
+  // via the surrounding try/catch in sendFn / editFn.
+  it('24. channel fetch failure routes through classifyDiscordError', async () => {
+    const client = {
+      channels: { fetch: vi.fn().mockRejectedValue(discordErr('unknownMessage')) },
+    };
+    const adapter = new DiscordEditStreamingAdapter({
+      client: client as unknown as Parameters<typeof DiscordEditStreamingAdapter>[0]['client'],
+      channelId: 'bad-chan',
+    });
+    const { sendFn } = adapter.sessionOptions();
+    await expect(sendFn('x')).rejects.toMatchObject({
+      name: 'StreamingEditError',
+      kind: 'permanent',
+    });
+  });
 });
