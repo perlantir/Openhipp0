@@ -1,11 +1,12 @@
 /**
  * OS-keyring adapter contracts. We shell out to per-OS keyring tools
  * rather than ship a native binding — `secret-tool` on Linux,
- * `security` on macOS, PowerShell DPAPI on Windows. Trade-off: callers
- * need these tools installed (documented in docs/browser/profile-management.md).
+ * `security` on macOS, PowerShell + `advapi32.Cred*` on Windows.
+ * Trade-off: callers need these tools installed (documented in
+ * docs/browser/profile-management.md).
  */
 
-export type KeyringBackend = 'secret-tool' | 'security' | 'dpapi' | 'memory' | 'none';
+export type KeyringBackend = 'secret-tool' | 'security' | 'credman' | 'memory';
 
 export interface KeyringEntry {
   /** Service name (logical group). */
