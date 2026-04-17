@@ -38,3 +38,5 @@ export {
   LocalVisionStub,
 } from './providers/vision.js';
 export type { ClaudeVisionOptions, OpenAIVisionOptions } from './providers/vision.js';
+// BFW-003: multimodal video/audio reasoning + HTML5 caption track parsing
+export * as multimodal from './multimodal/index.js';
