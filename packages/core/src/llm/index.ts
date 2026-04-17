@@ -45,3 +45,7 @@ export {
   type ProviderFactory,
   type UsageRecord,
 } from './client.js';
+
+// G4: provider expansion (OpenAI-compat factories + Gemini + Bedrock +
+// credential pool + models.dev registry).
+export * from './providers/index.js';
