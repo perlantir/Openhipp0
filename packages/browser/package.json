@@ -24,7 +24,17 @@
   "dependencies": {
     "@openhipp0/core": "workspace:*"
   },
+  "peerDependencies": {
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "peerDependenciesMeta": {
+    "playwright-extra": { "optional": true },
+    "puppeteer-extra-plugin-stealth": { "optional": true }
+  },
   "devDependencies": {
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "vitest": "^3.2.4"
   }
 }
