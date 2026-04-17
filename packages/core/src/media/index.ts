@@ -18,6 +18,18 @@ export { OpenAIWhisperProvider, WhisperCppProvider } from './providers/openai-wh
 export type { OpenAIWhisperOptions, WhisperCppOptions } from './providers/openai-whisper.js';
 export { OpenAITtsProvider, LocalTtsStub } from './providers/openai-tts.js';
 export type { OpenAITtsOptions } from './providers/openai-tts.js';
+// G5: voice expansion
+export { EdgeTtsProvider, type EdgeTtsOptions } from './providers/edge-tts.js';
+export { ElevenLabsTtsProvider, type ElevenLabsOptions } from './providers/elevenlabs-tts.js';
+export { MiniMaxTtsProvider, type MiniMaxTtsOptions } from './providers/minimax-tts.js';
+export { PiperTtsProvider, type PiperRunner, type PiperTtsOptions } from './providers/piper-tts.js';
+export {
+  ElevenLabsVoiceCloner,
+  type ConsentRecord,
+  type ElevenLabsCloneOptions,
+  type EnrollVoiceInput,
+  type VoiceCloningProvider,
+} from './voice-cloning.js';
 export { OpenAIImageProvider } from './providers/openai-image.js';
 export type { OpenAIImageOptions } from './providers/openai-image.js';
 export {
