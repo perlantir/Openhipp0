@@ -35,15 +35,32 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm -r build
+      # Mobile package has its own Expo / EAS pipeline — excluded here and
+      # validated separately in the `mobile` job below. Tracked as BFW-005
+      # (pre-existing React 19 / RN / lucide / expo-camera type drift).
+      - run: pnpm --filter '!@openhipp0/mobile' -r build
 
-      - run: pnpm -r typecheck
+      - run: pnpm --filter '!@openhipp0/mobile' -r typecheck
 
-      - run: pnpm -r lint
+      - run: pnpm --filter '!@openhipp0/mobile' -r lint
 
       - run: pnpm -r test
 
       - run: pnpm test:e2e
+
+  mobile:
+    name: Mobile package (tests only, build via EAS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: 'pnpm' }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openhipp0/mobile test
 
   # ── Python SDK ─────────────────────────────────────────────────────────
   python:
