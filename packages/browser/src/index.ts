@@ -154,9 +154,11 @@ export {
   estimateEntropy,
   humanMouseCurve,
   humanScrollProfile,
+  createStealthChromium,
   ProxyRotator,
   readingPauseMs,
   seedOf,
+  stealthDoctor,
   type FingerprintDescriptor,
   type FingerprintEntropyEstimate,
   type MouseCurvePoint,
@@ -165,6 +167,9 @@ export {
   type ProxyRotationStrategy,
   type ProxyRotatorState,
   type ReadingPauseInput,
+  type StealthContext,
+  type StealthLaunchOptions,
+  type StealthModuleDeps,
 } from './stealth/index.js';
 
 export {
