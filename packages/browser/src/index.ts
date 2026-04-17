@@ -145,6 +145,37 @@ export {
   type ValidationProbe,
 } from './forms/index.js';
 
+// G1-d: workflows + multi-tab
+export {
+  playWorkflow,
+  Recorder,
+  substituteParameters,
+  WORKFLOW_SCHEMA_VERSION,
+  WorkflowStore,
+  type HealingContext,
+  type ParameterValues,
+  type PlayOptions,
+  type PlayResult,
+  type RecordedStep,
+  type RecorderOptions,
+  type SelectorHealer,
+  type StepKind,
+  type Workflow,
+  type WorkflowParameter,
+  type WorkflowStoreOptions,
+} from './workflow/index.js';
+
+export {
+  CrossTabState,
+  MultiTabOrchestrator,
+  type OrchestratorOptions,
+  type OrchestratorResult,
+  type StateValue,
+  type StateWatcher,
+  type TabResult,
+  type TabSpec,
+} from './multi-tab/index.js';
+
 // G1-b: snapshots
 export {
   capturePageSnapshot,
