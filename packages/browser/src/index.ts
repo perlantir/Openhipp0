@@ -92,3 +92,31 @@ export {
   type ExportResult,
   type ImportBundleOptions,
 } from './profiles/profile-export.js';
+
+// G1-b: snapshots
+export {
+  capturePageSnapshot,
+  compareSnapshots,
+  DEFAULT_RETENTION,
+  replaySnapshot,
+  replayTrail,
+  SNAPSHOT_SCHEMA_VERSION,
+  SnapshotStore,
+  type CapturePageInput,
+  type ConsoleEntry,
+  type CookieEntry,
+  type DiffEntry,
+  type DiffKind,
+  type DomPayload,
+  type NetworkEntry,
+  type ReplayOptions,
+  type ReplayResult,
+  type ReplayTarget,
+  type RetentionPolicy,
+  type ScreenshotPayload,
+  type SessionId,
+  type Snapshot,
+  type SnapshotDiff,
+  type SnapshotId,
+  type SnapshotStoreOptions,
+} from './snapshot/index.js';
