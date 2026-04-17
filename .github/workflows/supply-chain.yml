@@ -1,0 +1,60 @@
+name: supply-chain
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 5 * * 1' # Mondays 05:00 UTC
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit (prod)
+        run: pnpm audit --prod --audit-level=high
+      - name: pnpm audit (dev — report only)
+        run: pnpm audit --audit-level=high
+        continue-on-error: true
+
+  sbom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Generate SBOM via @cyclonedx/cyclonedx-npm
+        run: |
+          pnpm dlx @cyclonedx/cyclonedx-npm --output-file sbom.json --output-format json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  license-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: License allowlist
+        run: |
+          pnpm dlx license-checker --production --onlyAllow \
+            'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;Unlicense;CC0-1.0;CC-BY-3.0;CC-BY-4.0;0BSD;BlueOak-1.0.0;Python-2.0' \
+            || { echo "::error::Non-allowlisted license detected in prod deps"; exit 1; }

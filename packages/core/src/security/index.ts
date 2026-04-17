@@ -5,3 +5,6 @@ export { ALWAYS_BLOCKED_PATHS, POLICY_TEMPLATES, getTemplate } from './templates
 export { GovernanceEngine } from './governance.js';
 export type { ApprovalHandler } from './governance.js';
 export * as injection from './injection/index.js';
+// G8: adversarial corpus + red-team runner.
+export * as adversarial from './adversarial/index.js';
+export * as redTeam from './red-team/index.js';
