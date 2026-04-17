@@ -90,6 +90,10 @@ export {
   type StreamingBridgeDeps,
 } from './streaming.js';
 
+// G2-b: shared edit-in-place streaming infrastructure (Telegram / Discord
+// / Slack adapters land in PR #9 / #10 / #11).
+export * as streamingEdit from './streaming-edit/index.js';
+
 // G3: new bridges + registry.
 export { IMessageBridge, type IMessageBridgeOptions, type IMessageRawPayload, type IMessageTransport } from './imessage.js';
 export { TeamsBridge, type TeamsActivity, type TeamsBridgeOptions, type TeamsTransport } from './teams.js';

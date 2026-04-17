@@ -985,6 +985,48 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `docs/gap-closure-summary.md`, `docs/browser/followups.md`.
 - CONFIDENCE: high.
 
+### Phase G2-b — Per-bridge edit-streaming (PR #8 shared infra; PR #9/#10/#11 adapters)
+
+**DECISION:** Telegram MarkdownV2 = plain-text during stream + one formatted final edit + plain-text fallback on parse-error
+
+- REASONING: Telegram MarkdownV2 rejects the entire edit on any malformed escape, and a mid-stream partial `*bold ` with the closing `*` not yet emitted produces a 400 that silently drops the edit chain. We ship every incremental edit during the stream with `parse_mode: undefined` — raw characters, nothing for Telegram's parser to validate. On `kind: 'done'`: one final edit with the accumulated text re-escaped and `parse_mode: 'MarkdownV2'`. If that final edit returns 400, the session catches once and retries the same final edit WITHOUT `parse_mode` so the user still sees content rather than a dropped last frame.
+- ALTERNATIVES_REJECTED: Full MarkdownV2 escape on every edit with unclosed-marker detection (fragile — one missed Markdown state drops the whole chain). Skip `parse_mode` on all edits (loses readability on the final render).
+- AFFECTS: `streaming-edit/session.ts` `finalFormatEdit?` hook + Telegram adapter (PR #9). **Each rotated message is final-formatted independently — the rotation boundary is a semantic boundary, and the escape+parse-mode edit operates on one message's contents at a time.** A format pair that spans a rotation (e.g. `*bold` in msg 1 + `text*` in msg 2) renders as two separate literal asterisks — predictable, not a parse failure.
+- CONFIDENCE: high.
+
+**DECISION:** Debouncer `flush()` bypasses the timer; called on every terminal StreamEvent
+
+- REASONING: A debounced edit pending on the timer when `done` / `error` / `interrupted` arrives would leave the last tokens invisible for up to `delayMs` after the user sees the "done" UI transition. `Debouncer.flush()` fires the pending edit immediately and clears timer + pending state. `StreamingEditSession` invokes `flush()` synchronously on any terminal `StreamEventKind`. Idempotent — if nothing is pending, no-op.
+- ALTERNATIVES_REJECTED: Shorten debounce to 0 on done (races with `finalFormatEdit`). Have `session.feed(done)` issue a separate final edit outside the debouncer (breaks encapsulation).
+- AFFECTS: `streaming-edit/debouncer.ts` + every bridge adapter.
+- CONFIDENCE: high.
+
+**DECISION:** Approval gate: 30s strict / 120s permissive, per-call override wins; reject-on-timeout (default) emits StreamEvent
+
+- REASONING: A tool-call preview that never gets a decision can't block the stream forever. `ApprovalGate.wait(preview, resolver, opts)` races the resolver against a timer. On timeout, emits a synthetic `tool-call-rejected` StreamEvent with `reason: 'approval-timeout'` so the agent loop narrates "approval timed out; cancelling", then resolves with `{ approved, reason }` where `approved` follows the mode/override. Modes: `'strict'` (default 30s, reject on expire — the safe default), `'permissive'` (default 120s, **approve** on expire — operator opts in for trusted agents). Precedence: per-call `ApprovalWaitOptions` > session `approvalTimeoutMs`/`approvalTimeoutMode` > mode default. There is no unconditional "60s fallback".
+- ALTERNATIVES_REJECTED: No timeout (stream hangs). Silent reject with no StreamEvent (agent never narrates). Always reject on timeout regardless of mode (defeats the trusted-agent case).
+- AFFECTS: `streaming-edit/approval-gate.ts` + Slack adapter wiring (PR #11).
+- CONFIDENCE: high.
+
+**DECISION:** WhatsApp Business stays on the `SentenceChunker` path — no edit primitive available
+
+- REASONING: WhatsApp Cloud API doesn't expose `messages.edit`. Editing shipped in WhatsApp CLIENT apps in 2022 but is not in the Business Platform. Streaming via edit would force send-per-token → rate-limit death. `SentenceChunker` yields correct "typing-in-chunks" behavior. Revisit only if Meta ships an edit primitive.
+- AFFECTS: `whatsapp-business.ts` — no change in PR #8/#9/#10/#11.
+- CONFIDENCE: high.
+
+**DECISION:** Signal / Matrix / Mattermost edit-streaming deferred out of G2 scope — filed as BFW-009 after PR #11
+
+- REASONING: All three support edits protocol-wise (Signal 2023+, Matrix `m.replace`, Mattermost `PUT /posts/{id}`), but each has per-protocol gotchas (Matrix E2E edits re-encrypt; Signal edit-storm on desktop clients; Mattermost `edit_at`/`update_at` field drift). Ship Big-3 first, battle-test, then port.
+- AFFECTS: `signal.ts`, `matrix.ts`, `mattermost.ts` — no change in this PR chain. BFW-009 row lands in `docs/browser/followups.md` at PR #11 merge.
+- CONFIDENCE: medium. Revisit after the Big-3 have edit-streamed through a real workload.
+
+**DECISION:** Rate-limit backoff: exponential doubling capped at 4×, decays to 1× after 10 consecutive successful edits
+
+- REASONING: Bridges report rate-limiting via `StreamingEditError` kind `'rate-limit'`. Session doubles the debounce multiplier on each such error (1→2→4), caps at 4× (`RATE_LIMIT_CAP`), and halves toward 1× after `RATE_LIMIT_DECAY_AFTER = 10` consecutive successful edits without another rate-limit. `retryAfterMs` from the bridge (e.g. `Retry-After` header) is captured via `StreamingEditError.retryAfterMs` for telemetry (`lastRetryAfterMs()` introspection). `'transient'` absorbs + retries on next tick without touching the multiplier. `'permanent'` disables the session and emits a synthetic `error` StreamEvent; subsequent `feed()` calls are no-ops.
+- ALTERNATIVES_REJECTED: No backoff (tight retry loop hammers the rate-limited endpoint). Unbounded exponential growth (long unresponsive window silently stretches debounce into minutes of perceived hang). Immediate session failure on first rate-limit (too brittle).
+- AFFECTS: `streaming-edit/session.ts` `#onRateLimit` + `#onSuccess` + `currentMultiplier()` / `lastRetryAfterMs()` introspection hooks.
+- CONFIDENCE: medium. First real workload will calibrate cap + decay.
+
 ---
 
 ## Coding Standards
