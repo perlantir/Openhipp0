@@ -28,3 +28,7 @@ export { aggregate, successRate, createCollector } from './metrics.js';
 
 export * from './benchmarks/index.js';
 export * from './original/index.js';
+
+// G7: corpus loaders + comparison runners
+export * from './corpus/index.js';
+export * from './compare/index.js';
