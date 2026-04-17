@@ -68,7 +68,7 @@ export interface SessionOptions {
   readonly sendFn: SendFn;
   /** Receives synthetic events (approval-timeout, overflow rotation, etc.). */
   readonly streamSink: streaming.StreamingSink;
-  /** Per-bridge default: Telegram 1000, Discord 200, Slack 1200. */
+  /** Per-bridge default: Telegram 1000, Discord 200, Slack 1000. */
   readonly debounceMs: number;
   /** Per-bridge default: Telegram 4096, Discord 2000, Slack 40000. */
   readonly maxMessageBytes: number;

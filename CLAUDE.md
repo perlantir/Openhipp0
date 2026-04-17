@@ -1158,6 +1158,97 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `adapters/discord.ts` `_debugPendingCount()`. Underscore + `@internal` JSDoc signal test-only contract; not re-exported from `adapters/index.ts`.
 - CONFIDENCE: high.
 
+### Phase G2-b adapters — PR #11 Slack
+
+**DECISION 11-A:** `maxMessageBytes = 40000` is an EXACT UTF-8 byte cap, not a conservative approximation
+
+- REASONING: Slack's 40k char limit for `chat.update`/`chat.postMessage` is measured in actual UTF-8 bytes (documented on the API reference). This is a **semantic** difference from Telegram (4096 UTF-16 code units, approximated conservatively in bytes) and Discord (2000 UTF-16 code units, approximated in bytes) — where the byte-mode in `rotateOnOverflow` incurs up to ~67% packing loss for CJK content. For Slack, byte-mode is exact: no packing loss for any character class, rotation fires at-or-below the real limit, never over.
+- ALTERNATIVES_REJECTED: Conservatively floor to 30000 (unnecessary — 40000 is hard-documented, no safety buffer needed); add `unit: 'bytes' | 'utf16-code-units'` to `rotateOnOverflow` (no bridge now needs it — Telegram/Discord are intentionally conservative, Slack is exact).
+- AFFECTS: `adapters/slack.ts` `SLACK_BYTE_CAP = 40_000`; T-1 asserts.
+- CONFIDENCE: high.
+
+**DECISION 11-B:** `finalFormatEdit` ships plain-during-stream + terminal `mrkdwn` re-format; escaper has two orthogonal rules
+
+- REASONING: Slack's `mrkdwn` is not CommonMark. Critical gotchas:
+  - Links use angle-bracket syntax `<url|text>`, not `[text](url)`.
+  - Bare `<`, `>`, `&` are entity-mangled by Slack's parser **everywhere in the text payload, including inside backticks** — `<T>` in code renders empty/broken (Go generics, JSX, pointer syntax, inline HTML all break).
+  - Triple-backtick fences are supported in `mrkdwn: true` text payloads; converting to single-backtick collapses multi-line code to inline (rendering bug).
+  The escaper in `slack-mrkdwn.ts` therefore has **two orthogonal passes**:
+  1. **Entity escape `<`/`>`/`&` EVERYWHERE** (including inside single- and triple-backtick code spans).
+  2. **Syntax transformation applies only OUTSIDE code spans** — `**bold**` → `*bold*`, `*italic*` → `_italic_`, `[text](url)` → `<url|text>`, bare `_` → `\_`.
+  Stream plain text during the run (no `mrkdwn` flag); one terminal `chat.update` with `mrkdwn: true` + escaped text gives the final render. On parse-error response (e.g. `invalid_arguments`), retry ONCE with the un-escaped original text and no `mrkdwn` flag so the user sees content rather than a dropped terminal edit (mirrors Telegram's PR #9 plain-text fallback; PR #8 DECISION 1).
+- ALTERNATIVES_REJECTED: Stream `mrkdwn` throughout (Discord's pattern) — link syntax differs from CommonMark so mid-stream partial tokens would render wrong; triple-backtick handling breaks across debouncer boundaries. Entity-escape only outside code spans (the plan's original T-m8 semantic) — ships a common-case bug where `<T>` inside backticks renders broken; reviewer caught this as a blocker.
+- AFFECTS: `adapters/slack.ts` `#finalFormatEdit` + `adapters/slack-mrkdwn.ts` two-pass escaper. T-m5 (Wikipedia nested-parens), T-m8 (entity inside code), T-m13 (round-trip anchor) exercise the combined rules.
+- CONFIDENCE: medium — escaper is the PR's highest-risk surface. T-m13 is the combination-bug detector; if it passes and T-m1..T-m12 pass, the rules compose correctly.
+
+**DECISION 11-C:** Approval cleanup uses `response_url` with `replace_original: true`, NOT `chat.update`
+
+- REASONING: When a user taps a Block Kit button, Slack's Interactivity webhook delivers `response_url` — a one-time URL (valid 30 minutes) that accepts a POST with `{replace_original: true, blocks: []}` to rewrite the prompt message. Three wins over `chat.update`:
+  1. No `chat:write` scope required on the original message — the interactivity payload grants implicit rewrite authority.
+  2. Not counted against the Tier-3 `chat.update` rate bucket (1/sec/channel).
+  3. No race with concurrent streaming-edit `chat.update` calls on the same channel's rate-bucket.
+  Cleanup is fire-and-forget; a failed POST doesn't change the approval outcome. Matches Telegram's cleanup-via-stripped-keyboard + Discord's `interaction.update({components: []})` semantics on "buttons disappear after tap".
+- ALTERNATIVES_REJECTED: `chat.update` the prompt message (extra scope + shared rate bucket); `chat.postMessage` a separate "decision recorded" reply (noisier, doesn't strip the original buttons).
+- AFFECTS: `adapters/slack.ts` `#postResponseUrl` via injectable `fetchImpl` (defaults to `globalThis.fetch`, Node 22 native — no `node-fetch`/`cross-fetch` dep). T-11 asserts POST body shape; T-18 asserts swallow on failure.
+- CONFIDENCE: high.
+
+**DECISION 11-D:** Interaction parsing = `ParsedSlackInteraction` + `isParsedSlackInteraction` guard + `parseBlockActionsPayload` function
+
+- REASONING: PR #10 lesson #3 — discriminate via a **named guard**, not inline `'field' in x`. Slack's real `block_actions` payload is verbose (`type`, `user`, `team`, `actions[]`, `response_url`, `trigger_id`, `channel`, `message`, etc.). The adapter only consumes `actions[0].action_id` + `response_url`. Narrow parsed shape `{actionId, responseUrl}` lets tests pass a 2-field object; production passes the raw webhook payload through `parseBlockActionsPayload`. Guard discriminates parsed (no `actions` key) from raw (`actions` array present).
+- ALTERNATIVES_REJECTED: Accept only raw payload (test scaffolding bloat); accept only parsed shape (production re-parse duplication); duck-type inline at each site (repeats PR #9's bug pattern).
+- AFFECTS: `adapters/slack.ts` exports; `onInteraction` dispatches via guard. T-13 (real payload), T-14 (malformed), T-15 (discrimination), T-16 (both paths) cover.
+- CONFIDENCE: high.
+
+**DECISION 11-E:** Error classifier returns `ClassifiedError` discriminated union + exhaustive switch
+
+- REASONING: Same pattern as Discord (DECISION 10-E) — `classifySlackError(err): ClassifiedError` returns `{kind:'classified', error} | {kind:'absorb'} | {kind:'unknown'}`. Call sites in `#editFn`, `#sendFn`, `#finalFormatEdit` use `switch (c.kind)`. No `instanceof` narrowing, no `null` sentinels, no repeat of PR #9's Telegram-classifier shape (which returns `StreamingEditError | 'absorb' | null`).
+- ALTERNATIVES_REJECTED: Match Telegram's older shape (perpetuates the pattern PR #9 review called out).
+- AFFECTS: `adapters/slack.ts` `ClassifiedError` + three call sites.
+- CONFIDENCE: high.
+
+**DECISION 11-F:** Error code mapping; `'absorb'` is a dead branch retained for parity; `#sendFn` throws invariant-violation if absorb ever fires
+
+- REASONING (mapping): `@slack/web-api` surfaces errors through four discriminated classes identified by `err.code`:
+  - `slack_webapi_rate_limited_error` (dedicated rate-limit shape) → `rate-limit`, `retryAfterMs = err.retryAfter * 1000`.
+  - `slack_webapi_platform_error` (200 OK with `ok:false`, `data.error: <code>`):
+    - `ratelimited` → `rate-limit` (retryAfterMs from headers when present).
+    - `channel_not_found` / `not_in_channel` / `is_archived` / `msg_too_long` / `message_not_found` / `invalid_auth` / `account_inactive` / `token_revoked` / `missing_scope` / `not_authed` → `permanent`.
+    - `invalid_arguments` / `invalid_blocks` → `parse-error` (enables `#finalFormatEdit` plain-text fallback).
+    - `fatal_error` / `internal_error` → `transient`.
+    - unknown code → `transient` (safe default).
+  - `slack_webapi_http_error` (non-200): 401/403/404 → `permanent`; 429 → `rate-limit` (`Retry-After` header, seconds → ms); 5xx / other → `transient`.
+  - `slack_webapi_request_error` (network): `transient`.
+  - Plain `Error.code` in `{ECONNRESET, ETIMEDOUT, ENETUNREACH, EAI_AGAIN}` → `transient`.
+  - any other `Error` → `transient` (safe default).
+  - non-Error throw → `{kind:'unknown'}`.
+- REASONING (absorb): Slack's "message unchanged" `chat.update` returns `ok: true` silently — not an error. No fixture ever classifies as `'absorb'`. Retained in the union for cross-bridge `switch` parity with Telegram/Discord. **Test T-22** iterates every fixture in `__fixtures__/slack-errors.json` and asserts `kind !== 'absorb'` — new fixture additions can't silently start exercising the absorb path. **Invariant-violation throw** in `#sendFn` (matches Discord PR #10 round-1 fix, identical message template `[SlackEditStreamingAdapter] sendFn hit absorb branch — DECISION 11-F invariant violated. Original error: ...` for cross-adapter grep consistency): if the absorb branch ever fires in `#sendFn`, throw loudly rather than returning a bogus `ts` that would cascade into a `chat.update(channel, '', text)` with an empty id. `#editFn`'s absorb branch silently returns (Telegram-style absorb-as-success semantics) — asymmetric but defensible for edit-shaped callsites.
+- ALTERNATIVES_REJECTED: Omit `'absorb'` from Slack's union (type drift vs. Telegram/Discord, bigger downstream cognitive cost); collapse HTTP/platform handling (loses permanent-vs-transient distinction).
+- AFFECTS: `adapters/slack.ts` `classifySlackError`, fixtures, T-22 invariant, T-23 (permanent propagates), T-24 (8 fixture × kind mapping), T-25 (network + unknown).
+- CONFIDENCE: medium on fine-grained code mapping (real workload tunes); high on absorb-as-dead-branch + invariant throw.
+
+**DECISION 11-G:** Debounce default = 1000ms (matches Tier-3 `chat.update` = 1 req/sec/channel)
+
+- REASONING: Slack's `chat.update` is Tier 3: 1 req/sec per channel. Faster baseline means every other edit is a 429 and the session lives in backoff hell. 1000ms puts the cadence at the rate-limit edge — the session then detects rate-limits via `Retry-After` and scales to 2×/4× via shared backoff machinery (PR #8) without going full-hang. Matches Telegram's 1000ms default; intentionally slower than Discord's 200ms (Discord's tier is ~50× looser).
+- ALTERNATIVES_REJECTED: 500ms (guaranteed to 429 every other edit); 1200ms (the `types.ts:71` JSDoc docstring hinted this — aspirational; 1000ms is the right number at the rate-limit edge, not past it).
+- AFFECTS: `adapters/slack.ts` `DEFAULT_DEBOUNCE_MS = 1000`. Housekeeping: `types.ts:71` JSDoc comment changed from "Slack 1200" → "Slack 1000" in this PR. T-2 asserts default + override.
+- CONFIDENCE: high.
+
+**DECISION 11-H:** UX defaults for the Slack approval flow (locked in plan, not implementation discretion)
+
+- **H1 — Blocks structure: MINIMAL 3 blocks.** (a) section with `mrkdwn` `*Tool call: ${toolName}*`, (b) section with `mrkdwn` `${summarizeArgsForApproval(args)}`, (c) actions block with two buttons (Approve primary / Reject danger). Matches Discord's embed minimalism. `summarizeArgsForApproval` is **byte-for-byte identical** to Discord's implementation — top-level keys only, never values, 200-char cap. Consistency across adapters is the goal; extracting to a shared helper is tracked as BFW-014 (not done in this PR).
+- **H2 — Ack visibility: via `response_url` POST `{replace_original: true, blocks: []}`.** Rewrites the prompt message with empty blocks → buttons disappear. Fire-and-forget.
+- **H3 — WebClient resolution: EAGER reference (constructor param), not lazy fetch.** Slack channel IDs are opaque strings used directly in `chat.*` calls — no `client.channels.fetch(id)` equivalent (Discord's gotcha). `WebClient` is constructed once by the caller (production: Bolt's `app.client` — which IS a `WebClient` — or a directly-constructed `WebClient`; tests: minimal fake with `chat.update` + `chat.postMessage`). Simpler than Discord's `#channelPromise` lazy-init. No channel-fetch failure path to test.
+- **H4 — Documented scopes:** Class JSDoc lists `chat:write` as required (for both `chat.postMessage` and `chat.update`). No additional scope needed for approval cleanup since `response_url` bypasses scope checks.
+- AFFECTS: `adapters/slack.ts` `approvalResolver()`, `#postResponseUrl`, constructor JSDoc. T-7 (3-block structure), T-8 (secret redaction), T-11 (response_url body).
+- CONFIDENCE: high (H1/H3/H4); medium (H2 — revisit if operators want a separate ephemeral confirmation message).
+
+**DECISION 11-I:** Triple-backtick fences pass through to `mrkdwn` unchanged; single-backtick inline code likewise
+
+- REASONING: Slack's `mrkdwn` in a `chat.update` text payload renders ```` ``` ```` fenced code blocks as multi-line code (documented for the `text` field when `mrkdwn: true`). Converting triple-backtick to single-backtick (the plan's original T-m9 shape) would collapse multi-line code into an inline span — visibly broken. The escaper passes both fence types through verbatim on the formatting axis; the entity-escape pass (11-B rule 1) still applies inside them so `<T>` inside a fenced block becomes `&lt;T&gt;`.
+- ALTERNATIVES_REJECTED: Convert to single-backtick multiline (breaks rendering). Wrap in a Block Kit `rich_text_preformatted` block (would change the message shape from a flat text+mrkdwn edit to a blocks edit — doesn't compose with mid-stream plain-text edits that return to flat text; the terminal edit would need to conditionally ship blocks vs. text depending on content, a fragile code path).
+- AFFECTS: `adapters/slack-mrkdwn.ts` `segmentInput` recognizes both `` ` `` and ```` ``` ```` delimiters; syntax transformation skips code segments; entity escape applies within.
+- CONFIDENCE: medium — Slack's docs are thin on exact parsing rules for triple-backtick in text payloads. If real traffic shows rendering issues, the fallback is switching to `rich_text` blocks for the terminal edit (larger restructure, not warranted speculatively). T-m9 + T-m13 exercise fence preservation + inside-fence entity escape.
+
 ---
 
 ## Coding Standards

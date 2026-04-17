@@ -1,0 +1,43 @@
+{
+  "ratelimited": {
+    "type": "slack_webapi_rate_limited_error",
+    "retryAfter": 2,
+    "message": "A rate limit was exceeded"
+  },
+  "channelNotFound": {
+    "type": "slack_webapi_platform_error",
+    "slackError": "channel_not_found",
+    "message": "channel not found"
+  },
+  "invalidAuth": {
+    "type": "slack_webapi_platform_error",
+    "slackError": "invalid_auth",
+    "message": "invalid auth"
+  },
+  "missingScope": {
+    "type": "slack_webapi_platform_error",
+    "slackError": "missing_scope",
+    "message": "missing scope"
+  },
+  "msgTooLong": {
+    "type": "slack_webapi_platform_error",
+    "slackError": "msg_too_long",
+    "message": "msg too long"
+  },
+  "fatalError": {
+    "type": "slack_webapi_platform_error",
+    "slackError": "fatal_error",
+    "message": "fatal error"
+  },
+  "http429WithRetryAfter": {
+    "type": "slack_webapi_http_error",
+    "statusCode": 429,
+    "message": "Too Many Requests",
+    "headers": { "retry-after": "3" }
+  },
+  "http502": {
+    "type": "slack_webapi_http_error",
+    "statusCode": 502,
+    "message": "Bad Gateway"
+  }
+}
