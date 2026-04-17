@@ -12,7 +12,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
-  ApprovalDecision,
   ApprovalResolver,
   ProgressEmitter,
   ProgressEvent,

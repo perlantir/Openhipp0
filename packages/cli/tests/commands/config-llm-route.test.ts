@@ -6,7 +6,7 @@ import { buildConfigRoutes } from '../../src/commands/serve.js';
 import { buildApiAuth } from '../../src/commands/api-auth.js';
 
 function findRoute(
-  routes: readonly { method: string; path: string; handler: Function }[],
+  routes: readonly { method: string; path: string; handler: (...args: unknown[]) => unknown }[],
   method: string,
   p: string,
 ) {
