@@ -31,6 +31,15 @@ import {
 } from './commands/misc.js';
 import { runMigrateOpenClaw } from './commands/migrate-openclaw.js';
 import { runMigrateHermes } from './commands/migrate-hermes.js';
+import {
+  runBrowserProfileCreate,
+  runBrowserProfileDelete,
+  runBrowserProfileExport,
+  runBrowserProfileImportBundle,
+  runBrowserProfileImportChrome,
+  runBrowserProfileList,
+  runBrowserProfileStatus,
+} from './commands/browser-profile.js';
 import { Hipp0CliError, type CommandResult } from './types.js';
 
 export const packageName = '@openhipp0/cli' as const;
@@ -84,6 +93,15 @@ export {
 } from './commands/misc.js';
 export { runMigrateOpenClaw } from './commands/migrate-openclaw.js';
 export { runMigrateHermes } from './commands/migrate-hermes.js';
+export {
+  runBrowserProfileCreate,
+  runBrowserProfileDelete,
+  runBrowserProfileExport,
+  runBrowserProfileImportBundle,
+  runBrowserProfileImportChrome,
+  runBrowserProfileList,
+  runBrowserProfileStatus,
+} from './commands/browser-profile.js';
 export type { MigrationFs, MigrationPlan, MigrationOp, MigrationReport } from './commands/migrate-shared.js';
 export {
   detectOpenClawSource,
@@ -526,6 +544,110 @@ export function createProgram(): Command {
         process.exit(result.exitCode);
       },
     );
+
+  // ─── browser profile ─────────────────────────────────────────────────────
+  const browser = program.command('browser').description('browser automation');
+  const browserProfile = browser.command('profile').description('manage encrypted browser profiles');
+
+  browserProfile
+    .command('create <label>')
+    .description('create a new encrypted profile')
+    .option('--tags <tags...>', 'tags (space-separated)')
+    .option('--notes <notes>', 'freeform notes')
+    .action(async (label: string, opts: { tags?: string[]; notes?: string }) => {
+      const global = program.opts<CliOptions>();
+      const result = await runBrowserProfileCreate({
+        label,
+        ...(opts.tags ? { tags: opts.tags } : {}),
+        ...(opts.notes ? { notes: opts.notes } : {}),
+      });
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
+
+  browserProfile
+    .command('list')
+    .description('list all profiles')
+    .action(async () => {
+      const global = program.opts<CliOptions>();
+      const result = await runBrowserProfileList({});
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
+
+  browserProfile
+    .command('status <id>')
+    .description('show profile status (open / closed / not-found)')
+    .action(async (id: string) => {
+      const global = program.opts<CliOptions>();
+      const result = await runBrowserProfileStatus({ id: id as never });
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
+
+  browserProfile
+    .command('delete <id>')
+    .description('delete a profile (fails if currently open)')
+    .action(async (id: string) => {
+      const global = program.opts<CliOptions>();
+      const result = await runBrowserProfileDelete({ id: id as never });
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
+
+  browserProfile
+    .command('import <label>')
+    .description('import from a system Chrome user-data-dir')
+    .option('--from-chrome', 'import from system Chrome (default)')
+    .option('--user-data-dir <path>', 'override source user-data-dir')
+    .option('--profile-name <name>', 'profile name within user-data-dir (default "Default")')
+    .option('--accept-cookie-limitation', 'acknowledge that OS-keyring-encrypted cookies do not follow the import (BFW-001)')
+    .action(
+      async (
+        label: string,
+        opts: { fromChrome?: boolean; userDataDir?: string; profileName?: string; acceptCookieLimitation?: boolean },
+      ) => {
+        const global = program.opts<CliOptions>();
+        const result = await runBrowserProfileImportChrome({
+          label,
+          acceptCookieLimitation: Boolean(opts.acceptCookieLimitation),
+          ...(opts.userDataDir ? { sourceDir: opts.userDataDir } : {}),
+          ...(opts.profileName ? { profileName: opts.profileName } : {}),
+        });
+        emit(result, global);
+        process.exit(result.exitCode);
+      },
+    );
+
+  browserProfile
+    .command('export <id> <outFile>')
+    .description('export a profile as a portable .hipp0profile bundle')
+    .option('--recipient-passphrase <pass>', 'passphrase the recipient will use (random if omitted)')
+    .action(async (id: string, outFile: string, opts: { recipientPassphrase?: string }) => {
+      const global = program.opts<CliOptions>();
+      const result = await runBrowserProfileExport({
+        id: id as never,
+        outFile,
+        ...(opts.recipientPassphrase ? { recipientPassphrase: opts.recipientPassphrase } : {}),
+      });
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
+
+  browserProfile
+    .command('import-bundle <inFile> <label>')
+    .description('import a .hipp0profile bundle')
+    .requiredOption('--recipient-passphrase <pass>', 'passphrase from the exporter')
+    .action(async (inFile: string, label: string, opts: { recipientPassphrase: string }) => {
+      const global = program.opts<CliOptions>();
+      const result = await runBrowserProfileImportBundle({
+        inFile,
+        label,
+        recipientPassphrase: opts.recipientPassphrase,
+      });
+      emit(result, global);
+      process.exit(result.exitCode);
+    });
 
   return program;
 }

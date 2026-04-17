@@ -66,11 +66,16 @@ open-hipp0/
 | `scheduler` | `core`, `memory`                          | `bridge`, `dashboard`                                 |
 | `watchdog`  | `core`                                    | anything else (runs independently)                    |
 | `dashboard` | `sdk` only                                | `core`, `memory`, etc. directly                       |
-| `cli`       | `core`, `memory`, `scheduler`, `watchdog` | `dashboard`                                           |
+| `cli`       | `core`, `memory`, `scheduler`, `watchdog`, `bridge`, `browser` | `dashboard`                              |
 | `sdk`       | `core`, `memory` (types only)             | `bridge`, `scheduler`, `watchdog`, `dashboard`, `cli` |
+| `mcp`       | `core`, `memory`, `scheduler`, `watchdog`, `browser` | `bridge`, `dashboard`                         |
+| `browser`   | `core` (primitives in `core/browser`)     | everything else                                       |
 
 Rationale: keeps circular imports impossible, keeps build graph linear, keeps
-dashboard portable to any SDK consumer.
+dashboard portable to any SDK consumer. `browser` (added G1-a) holds higher-level
+automation capabilities (profiles, snapshots, workflows, multi-tab, site memory,
+network inspector) — primitives (`BrowserDriver`, `BrowserEngine`, SSRF guard,
+stealth, credential vault) stay in `core/browser` where existing consumers live.
 
 ---
 
@@ -805,6 +810,64 @@ CONFIDENCE: high | medium | low
 
 - REASONING: React Testing Library's `render` appends to `document.body`; without cleanup, multiple renders in one file collide (we saw multiple `data-testid="ws-status"` failures). Enabling vitest globals lets the setup file use `afterEach` without importing it in every test. Worth the slight global-pollution cost.
 - AFFECTS: `vitest.config.ts`, `tests/setup.ts`.
+- CONFIDENCE: high.
+
+---
+
+### Phase G1-a — New `@openhipp0/browser` package + profile management
+
+**DECISION:** Create `@openhipp0/browser` package; `core/browser` primitives stay in place
+
+- REASONING: `core/browser` (engine, driver interface, SSRF guard, stealth primitives, credential vault) is already depended on by core tools and memory's browser adapter. Moving it out would cascade across ~30 call sites for no functional gain. G1 ~doubles the browser surface area (profiles, snapshots, workflows, multi-tab, site memory, network inspector); a new package keeps the foundational tier thin.
+- ALTERNATIVES_REJECTED: Mass move to new package (big refactor, no benefit); extend in place under `core` (bloats foundational tier).
+- AFFECTS: new `packages/browser/`, import matrix, `architecture.md` diagram, `cli` + `mcp` gain a workspace dep on `browser`.
+- CONFIDENCE: high.
+
+**DECISION:** Encrypted-at-rest = decrypt-to-tmp + periodic checkpoint + tmpfs preference on Linux
+
+- REASONING: Chromium mutates its profile dir continuously during a session, so in-place encryption is impossible. On open: decrypt AES-256-GCM archive to `<profile>/.active/`, launch Chromium pointing at that dir. During session: every 60s (or 500 filesystem mutations, whichever first), write a fresh full encrypted checkpoint to `<profile>/data.wal-<seq>.enc`, keeping the last N=3 for rollback. On clean close: consolidate latest WAL → `data.enc`, shred WAL + `.active/`. On unclean shutdown: startup scrub finds orphan `.active/` dirs, replays the highest-`seq` WAL (or falls back to `data.enc`) into `<profile>/recovered/`, marks `lastUncleanExitAt` on the manifest, emits `HIPP0-0505`. On Linux, prefer `/dev/shm` (or `$XDG_RUNTIME_DIR` if tmpfs) for `.active/` when write-permitted; document disk fallback. On macOS/Windows: disk with 0700 mode.
+- ALTERNATIVES_REJECTED: Per-file encryption via FUSE overlay (OS-specific, needs root on Linux); encrypt only sensitive files (renderer reads them plaintext at runtime — no attacker-window benefit); treat "at rest" as export-format-only (contradicts spec).
+- AFFECTS: `profile-store.ts`, `profile-launcher.ts`, checkpoint watcher, startup scrub.
+- CONFIDENCE: medium. File-level full-checkpoint cost is measured on the first real profile; if overhead >5% of a typical session, G1-b revisits with a delta-based WAL.
+
+**DECISION:** One Chromium process per open profile
+
+- REASONING: Required for G1-e — renderer-side fingerprint injection (Canvas/WebGL/Audio noise) must happen at browser launch, not per-context. Playwright `browserContext`s share a renderer process, so context-level isolation isn't enough. Cost is ~150 MB idle per Chromium.
+- AFFECTS: `profile-launcher.ts` tracks one `Browser` handle per profile id.
+- CONFIDENCE: high.
+
+**DECISION:** Scrypt passphrase derivation; TTY-detection hard-fails in non-interactive environments with no env var
+
+- REASONING: Source chain — `HIPP0_BROWSER_PASSPHRASE` env, then interactive `readline` with `setRawMode` echo-off if `process.stdin.isTTY && process.stdout.isTTY`, else throw `HIPP0_BROWSER_NON_INTERACTIVE` (`HIPP0-0503`) directing the operator to set the env var. Scrypt N=2¹⁷, r=8, p=1 via `node:crypto.scrypt`. Per-profile 32-byte salt stored in `manifest.json`. OS-keyring integration filed as BFW-002.
+- ALTERNATIVES_REJECTED: Raw key file on disk (defeats at-rest); PBKDF2 (scrypt is stronger at similar cost); silent wait on stdin (hangs CI/systemd).
+- AFFECTS: `crypto.ts`, `profile-store.ts`, CLI.
+- CONFIDENCE: high.
+
+**DECISION:** Concurrent-open = hard fail with structured diagnostic including lock staleness
+
+- REASONING: Lock file `<profile>/.active/LOCK` carries `{ pid, startedAt, host }`. `ProfileManager.open` reads the lock; cross-checks PID existence + process start time vs lock creation time to classify `lockStaleness` as `'live' | 'likely_stale' | 'unknown'`; throws `Hipp0BrowserProfileBusyError` with `{ code, externalCode: 'HIPP0-0502', owningPid, sessionStartedAt, host, lockStaleness, resolutionOptions: ['wait', 'kill', 'status'] }`. CLI renders staleness to distinguish PID reuse from a live session.
+- ALTERNATIVES_REJECTED: Wait-with-timeout (UX confusion); best-effort double-open (fingerprint collisions, corrupt state).
+- AFFECTS: `profile-manager.ts`, `errors.ts`, CLI.
+- CONFIDENCE: high.
+
+**DECISION:** Chrome-profile import copies verbatim; OS-keyring cookie decrypt deferred as BFW-001
+
+- REASONING: Chrome encrypts cookie values with DPAPI / Keychain / libsecret. Decrypting requires three OS-specific bridges + same-user-session guarantees. G1-a scope: copy the source profile dir into our managed location and encrypt with our key. CLI requires `--accept-cookie-limitation` flag OR interactive confirmation; `docs/browser/profile-management.md` has a prominent Known Limitations section; `docs/browser/followups.md` tracks the decrypt work as BFW-001 so it can't vanish.
+- ALTERNATIVES_REJECTED: Block import (localStorage/IndexedDB/extensions still useful on same user/machine); implement decrypt now (triples scope).
+- AFFECTS: `profile-import.ts`, CLI, two docs files.
+- CONFIDENCE: medium.
+
+**DECISION:** Export envelope is versioned and carries explicit KDF params; re-wrapped at export time
+
+- REASONING: `.hipp0profile` = single JSON with `PROFILE_EXPORT_ENVELOPE_VERSION = 1` + `kdf: { algo:'scrypt', N, r, p, saltB64 }` + `cipher: { algo:'aes-256-gcm', ivB64, authTagB64, ciphertextB64 }` + `manifest`. Recipient supplies a passphrase at export; re-wrap means exporter doesn't share their original passphrase. Explicit KDF params future-proof against scrypt tuning changes.
+- ALTERNATIVES_REJECTED: Source-encrypted blob as-is (requires sharing original passphrase); hard-coded KDF params (breaks on future tuning).
+- AFFECTS: `profile-export.ts`, envelope schema.
+- CONFIDENCE: high.
+
+**DECISION:** Profile manifest is versioned forward-only; `MIGRATIONS` table for future sub-phases
+
+- REASONING: `PROFILE_MANIFEST_VERSION = 1`. Future fields (fingerprint in G1-e, workflow bindings in G1-d) land via `MIGRATIONS: Record<number, ManifestMigration>`. Unknown versions refuse to load with a clear error. Matches Phase 4a `SNAPSHOT_VERSION` pattern.
+- AFFECTS: `profiles/types.ts`.
 - CONFIDENCE: high.
 
 ---

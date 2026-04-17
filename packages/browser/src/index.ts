@@ -1,0 +1,94 @@
+// @openhipp0/browser — higher-level browser automation.
+//
+// G1-a ships profile management. Snapshots, workflows, multi-tab,
+// site memory, network inspector land in G1-b…G1-e.
+
+export {
+  Hipp0BrowserError,
+  Hipp0BrowserImportLimitationNotAckedError,
+  Hipp0BrowserNonInteractiveError,
+  Hipp0BrowserProfileBusyError,
+  Hipp0BrowserProfileCorruptError,
+  Hipp0BrowserProfileNotFoundError,
+  Hipp0BrowserUncleanShutdownError,
+} from './errors.js';
+
+export {
+  MIGRATIONS,
+  PROFILE_EXPORT_ENVELOPE_VERSION,
+  PROFILE_MANIFEST_VERSION,
+  type AesGcmCipher,
+  type LockStaleness,
+  type ManifestMigration,
+  type OpenedProfile,
+  type OrphanReport,
+  type Profile,
+  type ProfileBusyDiagnostic,
+  type ProfileExportEnvelope,
+  type ProfileId,
+  type ProfileLockFile,
+  type ProfileManifest,
+  type ProfileStatus,
+  type ScrubReport,
+  type ScryptKdfParams,
+} from './profiles/types.js';
+
+export { packDir, unpackDir, type PackedArchive, type PackedFile } from './profiles/archive.js';
+
+export {
+  DEFAULT_SCRYPT_N,
+  DEFAULT_SCRYPT_P,
+  DEFAULT_SCRYPT_R,
+  decryptBlob,
+  defaultKdfParams,
+  deriveKey,
+  encryptBlob,
+  newIv,
+  newSalt,
+} from './profiles/crypto.js';
+
+export {
+  defaultProfilesDir,
+  systemChromeUserDataDir,
+  tmpfsCandidate,
+  type Platform,
+} from './profiles/paths.js';
+
+export {
+  newManifest,
+  ProfileStore,
+  type OpenHandle,
+  type ProfileStoreOptions,
+} from './profiles/profile-store.js';
+
+export {
+  closeSession,
+  launchForProfile,
+  type LauncherOptions,
+  type LaunchedSession,
+} from './profiles/profile-launcher.js';
+
+export {
+  createProfileManager,
+  ProfileManager,
+  type CreateOptions,
+  type OpenedProfileHandle,
+  type PassphraseProvider,
+  type ProfileManagerOptions,
+} from './profiles/profile-manager.js';
+
+export {
+  asProfileId,
+  cookieLimitationWarning,
+  importFromChrome,
+  type ImportOptions,
+} from './profiles/profile-import.js';
+
+export {
+  envelopeSanity,
+  exportProfile,
+  importBundle,
+  type ExportOptions,
+  type ExportResult,
+  type ImportBundleOptions,
+} from './profiles/profile-export.js';

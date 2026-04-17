@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@openhipp0/bridge": "workspace:*",
+    "@openhipp0/browser": "workspace:*",
     "@openhipp0/core": "workspace:*",
     "@openhipp0/memory": "workspace:*",
     "@openhipp0/scheduler": "workspace:*",

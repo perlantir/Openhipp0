@@ -27,6 +27,7 @@ export interface ErrorCodeMetadata {
     | 'bridge'
     | 'scheduler'
     | 'enterprise'
+    | 'browser'
     | 'generic';
   /** What typically causes this error. */
   readonly cause: string;
@@ -140,6 +141,54 @@ const REGISTRY: readonly ErrorCodeMetadata[] = [
     cause: 'The supplied cron expression did not parse.',
     fix: 'Use 5-field cron or natural-language (e.g. "every 15 minutes"). See `hipp0 cron --help`.',
     docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0402',
+  },
+  {
+    code: 'HIPP0_BROWSER_PROFILE_NOT_FOUND',
+    externalCode: 'HIPP0-0501',
+    category: 'browser',
+    cause: 'A browser profile was requested but no profile with that id exists.',
+    fix: 'Run `hipp0 browser profile list` to see valid ids, or `create` a new one.',
+    docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0501',
+  },
+  {
+    code: 'HIPP0_BROWSER_PROFILE_BUSY',
+    externalCode: 'HIPP0-0502',
+    category: 'browser',
+    cause: 'Profile is already open by another process; one Chromium per profile is enforced.',
+    fix: 'Close the owning session (pid shown on the error), or use `hipp0 browser profile status <id>` to inspect; `kill` option for crashed locks.',
+    docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0502',
+  },
+  {
+    code: 'HIPP0_BROWSER_NON_INTERACTIVE',
+    externalCode: 'HIPP0-0503',
+    category: 'browser',
+    cause: 'Passphrase needed but stdin/stdout is not a TTY and HIPP0_BROWSER_PASSPHRASE is unset.',
+    fix: 'Set HIPP0_BROWSER_PASSPHRASE in the environment, or run the command in an interactive terminal.',
+    docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0503',
+  },
+  {
+    code: 'HIPP0_BROWSER_PROFILE_CORRUPT',
+    externalCode: 'HIPP0-0504',
+    category: 'browser',
+    cause: 'Profile archive failed AES-256-GCM authentication — wrong passphrase or tampered file.',
+    fix: 'Verify the passphrase. If tampering is suspected, restore from an exported `.hipp0profile` backup.',
+    docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0504',
+  },
+  {
+    code: 'HIPP0_BROWSER_UNCLEAN_SHUTDOWN',
+    externalCode: 'HIPP0-0505',
+    category: 'browser',
+    cause: 'Startup scrub found an orphaned `.active/` directory from a crashed session.',
+    fix: 'Advisory only — state was recovered from the last clean archive or checkpoint WAL. Recovered artifacts are under `<profile>/recovered/`.',
+    docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0505',
+  },
+  {
+    code: 'HIPP0_BROWSER_IMPORT_LIMITATION_NOT_ACKED',
+    externalCode: 'HIPP0-0506',
+    category: 'browser',
+    cause: 'Chrome profile import was attempted without acknowledging the OS-keyring cookie limitation.',
+    fix: 'Pass `--accept-cookie-limitation` on the CLI, or confirm interactively. See docs/browser/profile-management.md#known-limitations.',
+    docsUrl: 'https://docs.openhipp0.dev/errors/HIPP0-0506',
   },
 ];
 
