@@ -870,6 +870,121 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `profiles/types.ts`.
 - CONFIDENCE: high.
 
+### Phase G1-b — Page snapshot engine
+
+**DECISION:** Content-hash dedup via `refPrevId` for DOM + screenshot payloads
+
+- REASONING: Time-travel trails accumulate dozens of snapshots per session; re-encoding an unchanged DOM or screenshot each frame bloats disk by 20–50×. SHA-256 hash of raw HTML / PNG bytes; if it matches the previous snapshot, store `{ hash, refPrevId }` instead of the content. `SnapshotStore.resolveFull()` walks the chain back to the nearest inline copy.
+- AFFECTS: `snapshot/capture.ts`, `snapshot/store.ts`.
+- CONFIDENCE: high.
+
+### Phase G1-c — Upload/download + form intelligence
+
+**DECISION:** Cloud-storage sources are structural interfaces, not bundled adapters
+
+- REASONING: G1-c ships `UploadSource` with `kind: 'local' | 'url' | 'buffer' | 's3' | 'drive' | 'dropbox'` but only implements local / url / buffer natively. Cloud variants delegate to a caller-supplied `CloudStorageAdapter`. Shipping AWS SDK / Google Drive API / Dropbox SDK as hard deps balloons the install footprint for users who never touch those sources.
+- STATUS: **PARTIAL** — cloud adapters wire up when a real consumer surfaces. Tracked as a G1-c follow-up, not a BFW.
+- AFFECTS: `io/types.ts` CloudStorageAdapter interface.
+- CONFIDENCE: high.
+
+### Phase G1-d — Workflow record/play + multi-tab
+
+**DECISION:** `SelectorHealer` delegates to a caller-supplied LLM; no built-in healer
+
+- REASONING: AI-healed selector fallback is part of the workflow player contract but the actual LLM call belongs in the agent runtime, not the browser package. Keeps the browser package dependency-light.
+- STATUS: **PARTIAL** — interface shipped + tested with mock healer. Real LLM wiring lands when a workflow actually fails in production.
+- AFFECTS: `workflow/types.ts` SelectorHealer.
+- CONFIDENCE: high.
+
+### Phase G1-e — Stealth v2 + vision + site memory + devtools
+
+**DECISION:** Playwright-extra as optional peer; research artifact ships decision
+
+- REASONING: Research doc (`docs/browser/stealth-research.md`) evaluated playwright-extra vs Camoufox vs patchright vs undetected-playwright; baseline = playwright-extra + puppeteer-extra-plugin-stealth. Ja3 TLS + Camoufox evaluation deferred as BFW-006 + BFW-008 (both need external binaries).
+- STATUS: **PARTIAL** — G1-e fingerprint descriptor + behavior engine + proxy rotator + site memory + network inspector all shipped; G1-e BFW-007 production launcher now shipped (PR #3). Ja3 + Camoufox tracked.
+- AFFECTS: `stealth/*.ts`, `docs/browser/stealth-research.md`.
+- CONFIDENCE: high.
+
+### Phase G1-f — Streaming narrator interface
+
+**DECISION:** Narrator ships interface + two default sinks; G2 wires real transport
+
+- REASONING: Browser-task narration + agent-loop streaming share the same event shape; the browser package ships `NarrationEvent` + `BufferSink` + `EmitterSink` with no transport opinion. G2's `StreamEvent` is the transport.
+- AFFECTS: `streaming/narrator.ts`.
+- CONFIDENCE: high.
+
+### Phase G2 — Streaming-first agent loop
+
+**DECISION:** Per-bridge edit-streaming adapters are structural fallbacks; real `editMessage*` wiring lands as operators upgrade each bridge
+
+- REASONING: `formatStreamEvent()` + `StreamingAccumulator` produce correct markdown for every `StreamEvent` kind. Bridges that support edit-in-place (Telegram, Discord, Slack) currently render via that fallback — the final `accumulated` string is sent as one message per bridge callback. Real `editMessageText` / `message.edit` / `chat.update` adapters with rate-limit-aware batching replace that fallback per-bridge.
+- STATUS: **PARTIAL** — core protocol + `formatStreamEvent` + web-bridge WS streaming + dashboard `useAgentStream` + `<StreamingMessage>` + `<ToolCallPreview>` shipped. Real edit-in-place adapters for Telegram / Discord / Slack pending (no external blocker; estimate 200-300 LOC per bridge + tests). Mobile streaming UI deferred behind BFW-005.
+- AFFECTS: `@openhipp0/core/streaming`, `@openhipp0/bridge/streaming.ts`, `@openhipp0/dashboard/api/streaming.ts`, `@openhipp0/dashboard/components/{StreamingMessage,ToolCallPreview}.tsx`.
+- CONFIDENCE: medium (PARTIAL).
+
+### Phase G3 — Bridge expansion (12 → 18)
+
+**DECISION:** New bridges ship structural transports; real SDK glue is operator-supplied (same pattern as the original 12)
+
+- REASONING: iMessage / Teams / LINE / Twitch / Rocket.Chat / Zulip all expose a `XTransport` structural interface. Tests inject fakes. Production operators wire the real SDK (`matrix-bot-sdk`, `@microsoft/botbuilder`, `@line/bot-sdk`, `tmi.js`, Rocket.Chat JS SDK, `zulip-js`). Matches how `MattermostTransport`, `TelegramTransport`, etc. already work.
+- STATUS: SHIPPED (18 platform bridges, registry, capability matrix).
+- AFFECTS: `@openhipp0/bridge/{imessage,teams,line,twitch,rocket-chat,zulip}.ts`, `registry.ts`.
+- CONFIDENCE: high.
+
+### Phase G4 — LLM provider expansion (3 → 16+)
+
+**DECISION:** OpenAI-compatible endpoints collapse to thin factories over `OpenAIProvider`; native providers (Gemini, Bedrock) ship fetch-based implementations
+
+- REASONING: 10 of 13 new providers (OpenRouter, Together, Fireworks, DeepSeek, Kimi, Mistral, vLLM, LM Studio, Azure, Qwen, GLM, MiniMax, HF) speak OpenAI's `/v1/chat/completions` shape. A `createXProvider({ apiKey, model, baseUrl })` factory + default baseUrl is ~20 LOC each. Gemini + Bedrock need native request/response shaping.
+- STATUS: SHIPPED.
+- AFFECTS: `@openhipp0/core/llm/providers/*`.
+- CONFIDENCE: high.
+
+### Phase G5 — Voice (TTS + cloning + wake word)
+
+**DECISION:** Wake word + Talk Mode require per-platform native RN modules; ship when BFW-005 unblocks
+
+- REASONING: Porcupine / Vosk / native Speech API each demand iOS + Android native bindings. Mobile can't compile clean (BFW-005 — React 19 type drift). The moment Expo SDK 53 ships and we upgrade mobile to RN 0.78+ / React 19, the wake-word module is writeable; before then it's wasted work.
+- STATUS: **PARTIAL** — TTS providers (Edge, ElevenLabs, MiniMax, Piper) + ElevenLabs voice cloning with consent+watermark gate shipped. Wake word + Talk Mode NOT STARTED (waiting on BFW-005).
+- AFFECTS: `@openhipp0/core/media/providers/*`, `voice-cloning.ts`. Mobile wake-word file paths reserved but empty.
+- CONFIDENCE: high.
+
+### Phase G6 — Windows support
+
+**DECISION:** PowerShell installer is the primary Windows path until a code-signing cert is provisioned; MSI stays as source-only
+
+- REASONING: `scripts/install.ps1` works today with zero infrastructure — run as admin, done. MSI builds require WiX toolset + signing cert + a signed release pipeline. No urgent Windows user is blocked; the cert is a separate ops ticket.
+- STATUS: **PARTIAL** — `.cmd` + `.ps1` shims, `platform-paths.ts`, `install.ps1`, `openhipp0.wxs`, `docs/windows.md` shipped. MSI build automation + signing not started.
+- AFFECTS: `packages/cli/bin/*`, `scripts/openhipp0.wxs`, `scripts/install.ps1`, `docs/windows.md`.
+- CONFIDENCE: high.
+
+### Phase G7 — Real eval corpora
+
+**DECISION:** Corpus loaders + comparison runner + download script + CI workflow ship before any real numbers
+
+- REASONING: Framework stays verifiable without API-key + corpus access. Operators (or the maintainer) download corpora + provide keys + run via CI workflow_dispatch. Numbers get published separately, not committed in-repo (legal risk; also they'd drift out of date immediately).
+- STATUS: **PARTIAL** — `corpus/loader.ts`, `compare/runner.ts`, `scripts/download-corpora.sh`, `.github/workflows/eval.yml` shipped. No real run against τ-bench / SWE-bench Lite / GAIA / AgentBench yet. **Running this on the VPS is the next agreed step.**
+- AFFECTS: `@openhipp0/eval/corpus/`, `/compare/`, `scripts/download-corpora.sh`, `.github/workflows/eval.yml`.
+- CONFIDENCE: high.
+
+### Phase G8 — Adversarial security
+
+**DECISION:** Static 90-case corpus + red-team framework ship; scheduled CI run against staging is a follow-up
+
+- REASONING: Corpus + runner are deterministic and safe to commit. Running the framework autonomously against a live staging instance needs (a) a staging instance and (b) API budget. Not in v1 scope for this repo; operator can stand up a scheduled run locally via the `TargetAgent` interface.
+- STATUS: **PARTIAL** — 90-case corpus + `runRedTeam()` + `summarizeReport()` shipped. No scheduled CI job yet; when it lands it belongs in `.github/workflows/security.yml`.
+- AFFECTS: `@openhipp0/core/security/adversarial/`, `/red-team/`.
+- CONFIDENCE: high.
+
+### Phase G9 — Integration + docs
+
+**DECISION:** G9 consolidates, doesn't add code
+
+- REASONING: `docs/gap-closure-summary.md` + per-phase roll-up + honest caveat sections. The PARTIAL status of G2/G5/G6/G7/G8 above is the authoritative source of "what's still to do".
+- STATUS: SHIPPED.
+- AFFECTS: `docs/gap-closure-summary.md`, `docs/browser/followups.md`.
+- CONFIDENCE: high.
+
 ---
 
 ## Coding Standards
