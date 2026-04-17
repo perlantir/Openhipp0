@@ -93,6 +93,58 @@ export {
   type ImportBundleOptions,
 } from './profiles/profile-export.js';
 
+// G1-c: I/O + forms
+export {
+  DownloadManager,
+  resolveUploadSource,
+  stageSourceToDisk,
+  UploadHandler,
+  type BrowserDownload,
+  type CloudStorageAdapter,
+  type DownloadCompletedEvent,
+  type DownloadEvents,
+  type DownloadFailedEvent,
+  type DownloadManagerListener,
+  type DownloadManagerOptions,
+  type DownloadStartedEvent,
+  type PageWithFileInputs,
+  type ResolvedSourceFile,
+  type UploadHandlerDeps,
+  type UploadOptions,
+  type UploadProgress,
+  type UploadProgressListener,
+  type UploadResult,
+  type UploadSource,
+  type VirusScanHook,
+  type VirusScanResult,
+} from './io/index.js';
+
+export {
+  applyKindOverrides,
+  classifyValidationMessage,
+  collectValidationErrors,
+  detectForms,
+  DraftStore,
+  inferFieldKind,
+  PatternStore,
+  type AxNode as FormAxNode,
+  type DetectOptions,
+  type DomAccessor,
+  type DraftStoreOptions,
+  type FormDraft,
+  type FormPattern,
+  type InferenceInput,
+  type InferenceResult,
+  type InferredField,
+  type InferredFieldKind,
+  type InferredForm,
+  type InferredFormStep,
+  type PatternStoreOptions,
+  type SuggestionContext,
+  type ValidationError,
+  type ValidationProbe,
+} from './forms/index.js';
+
 // G1-b: snapshots
 export {
   capturePageSnapshot,
