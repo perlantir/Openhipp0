@@ -39,15 +39,33 @@ export class Debouncer {
     this.#timers = opts.timers ?? DEFAULT_TIMERS;
   }
 
-  /** Replace pending text + reset timer. */
-  push(text: string): void {
+  /**
+   * Replace pending text + reset timer.
+   *
+   * `delayMsOverride` temporarily uses a longer/shorter delay for JUST
+   * this arming — used by the session for rate-limit backoff
+   * (effective-delay = baseDelayMs × rateMultiplier, optionally clamped
+   * to `retryAfterMs`). Omit to use the default `delayMs`.
+   *
+   * Contract: the onFlush callback is responsible for catching every
+   * exception it cares about. `#fire()` wraps the call with `void` so
+   * any unhandled rejection is absorbed — this avoids spurious
+   * unhandledRejection noise on timer-driven fires where there's no
+   * caller frame to propagate to.
+   */
+  push(text: string, delayMsOverride?: number): void {
     if (this.#disposed) return;
     this.#pending = text;
     if (this.#handle !== null) this.#timers.clearTimeout(this.#handle);
+    const delay = typeof delayMsOverride === 'number' ? delayMsOverride : this.#delayMs;
     this.#handle = this.#timers.setTimeout(() => {
       this.#handle = null;
       void this.#fire();
-    }, this.#delayMs);
+    }, delay);
+    // `void this.#fire()` intentional: setTimeout can't `await`, so an
+    // unhandled rejection would bubble to Node's unhandledRejection
+    // handler. Callers rely on onFlush catching its own errors; we
+    // absorb stragglers to keep the event loop clean.
   }
 
   /** Fire IMMEDIATELY with the pending text. Idempotent when idle. */

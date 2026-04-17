@@ -38,4 +38,21 @@ describe('rotateOnOverflow', () => {
       expect(res3.carry.length).toBe(15);
     }
   });
+
+  it('never cuts mid-codepoint for 4-byte UTF-8 / surrogate pairs', () => {
+    // 💀 = U+1F480, 4 bytes in UTF-8, 2 UTF-16 code units per char.
+    const emoji = '💀'.repeat(10); // 40 bytes, 20 JS-string chars
+    // Cap at an *odd* byte count to stress the boundary check — naive
+    // truncation would cut mid-codepoint; the helper must round down.
+    const res = rotateOnOverflow({ current: emoji, maxBytes: 11 });
+    expect(res.fits).toBe(false);
+    if (!res.fits) {
+      // 11 bytes → max 2 whole emoji (8 bytes) fit.
+      expect(res.keep.length).toBe(4); // 2 emoji × 2 UTF-16 units
+      expect(res.carry.length).toBe(16);
+      // Each side reconstitutes cleanly — iterable codepoint count.
+      expect([...res.keep]).toHaveLength(2);
+      expect([...res.carry]).toHaveLength(8);
+    }
+  });
 });

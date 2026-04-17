@@ -58,6 +58,14 @@ export class StreamingEditSession {
   #currentTarget: BridgeEditTarget;
   #currentMessageText = '';
   #rotatedMessages: RotatedMessage[] = [];
+  /**
+   * UTF-16 code-unit offset into the running accumulator where the current
+   * in-flight message starts. Updated after every successful rotation.
+   * Tracked explicitly (rather than recomputed from rotatedMessages
+   * string lengths) so the unit is unambiguously "JS string index" —
+   * matching what `accumulator.slice(offset)` expects.
+   */
+  #accumulatorOffset = 0;
   #disposed = false;
   #permanentlyFailed = false;
   /** Running multiplier for rate-limit backoff (1..RATE_LIMIT_CAP). */
@@ -124,7 +132,7 @@ export class StreamingEditSession {
       // Sync our per-message slice to the accumulator's final state, then
       // flush any pending debounced edit, then run the per-message
       // final-format pass.
-      this.#currentMessageText = accumulated.slice(this.#rotatedBytesConsumed());
+      this.#currentMessageText = accumulated.slice(this.#accumulatorOffset);
       await this.#debouncer.flush();
       await this.#runFinalFormatPass();
       return;
@@ -132,18 +140,26 @@ export class StreamingEditSession {
 
     // Any other event: sync per-message slice + push latest text into
     // the debouncer (latest-value-wins semantics — see debouncer.ts).
-    const nextMessageText = accumulated.slice(this.#rotatedBytesConsumed());
+    const nextMessageText = accumulated.slice(this.#accumulatorOffset);
     if (nextMessageText === this.#currentMessageText) return;
     this.#currentMessageText = nextMessageText;
-    this.#debouncer.push(nextMessageText);
+    this.#debouncer.push(nextMessageText, this.#effectiveDelayMs());
   }
 
-  #rotatedBytesConsumed(): number {
-    // Sum of character-lengths already committed to previous messages.
-    // Per DECISION 1 AFFECTS, each rotated message is self-contained,
-    // so we track character offsets against the running accumulator.
-    return this.#rotatedMessages.reduce((acc, m) => acc + m.text.length, 0);
+  /**
+   * Effective debounce for the next timer arming. Applies rate-limit
+   * backoff (baseline × `#rateMultiplier`, capped at `RATE_LIMIT_CAP`×)
+   * and respects any `retryAfterMs` hint from the bridge when that
+   * value is larger — whichever wait is more conservative wins.
+   */
+  #effectiveDelayMs(): number {
+    const base = this.#opts.debounceMs * this.#rateMultiplier;
+    if (this.#lastRetryAfterMs !== null && this.#lastRetryAfterMs > base) {
+      return this.#lastRetryAfterMs;
+    }
+    return base;
   }
+
 
   // ─── Edit application ─────────────────────────────────────────────
 
@@ -164,6 +180,9 @@ export class StreamingEditSession {
         return;
       }
       this.#rotatedMessages.push({ messageId: target.rootMessageId, text: rotated.keep });
+      // Advance the accumulator offset by the exact JS-string length of
+      // the keep portion — matches what `accumulator.slice(offset)` uses.
+      this.#accumulatorOffset += rotated.keep.length;
       let newMessageId: string;
       try {
         newMessageId = await this.#opts.sendFn(rotated.carry);
@@ -260,9 +279,13 @@ export class StreamingEditSession {
         await this.#markPermanentFailure(err);
         return;
       }
-      // parse-error on mid-stream edits is unexpected (we're plain-text
-      // there). Treat as permanent for defense-in-depth.
-      await this.#markPermanentFailure(err);
+      // parse-error mid-stream: absorb as skip-this-edit. Slack BlockKit
+      // payloads can be rejected by the bridge validator intermittently;
+      // killing the whole session on one bad frame is far too brittle.
+      // The NEXT debouncer tick will retry with the latest text. The
+      // final-format pass has its own plain-text fallback for the
+      // terminal edit (DECISION 1).
+      this.#consecutiveOk = 0;
       return;
     }
     // Unknown error: treat as transient.

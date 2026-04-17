@@ -85,13 +85,42 @@ export class ApprovalGate {
       }, timeoutMs);
     });
 
-    const resolverPromise = resolver(preview).then((decision) => {
-      if (!timedOut && timerHandle !== null) {
-        this.#timers.clearTimeout(timerHandle);
-        timerHandle = null;
-      }
-      return decision;
-    });
+    const resolverPromise = Promise.resolve()
+      .then(() => resolver(preview))
+      .then((decision) => {
+        if (!timedOut && timerHandle !== null) {
+          this.#timers.clearTimeout(timerHandle);
+          timerHandle = null;
+        }
+        return decision;
+      })
+      .catch((err: unknown): streaming.ApprovalDecision => {
+        // Resolver threw (sync) or rejected (async). DON'T propagate —
+        // that would crash the entire streaming session. Apply the same
+        // mode-based policy as timeout, emit a truthful StreamEvent so
+        // the agent narrates why the tool call was abandoned. See the
+        // Slack-webhook-returns-malformed-JSON case for a concrete
+        // example.
+        if (!timedOut && timerHandle !== null) {
+          this.#timers.clearTimeout(timerHandle);
+          timerHandle = null;
+        }
+        const onError: 'reject' | 'approve' = this.#mode === 'strict' ? 'reject' : 'approve';
+        const message = err instanceof Error ? err.message : String(err);
+        this.#streamSink.emit({
+          kind: 'tool-call-rejected',
+          turnId: preview.turnId,
+          at: this.#now(),
+          toolName: preview.toolName,
+          approvalId: preview.approvalId,
+          reason: `resolver-error (${onError}): ${message}`,
+        });
+        return {
+          approvalId: preview.approvalId,
+          approved: onError === 'approve',
+          reason: onError === 'approve' ? 'resolver-error-permissive' : 'resolver-error',
+        };
+      });
 
     return Promise.race([resolverPromise, timeoutPromise]);
   }

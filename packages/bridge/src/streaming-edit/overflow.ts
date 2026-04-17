@@ -7,12 +7,25 @@
  * next message with the overflow tail. Splits at the last `\n` within
  * the keep-window when available; hard-cuts at `maxBytes` otherwise.
  *
- * Byte-length is computed against the UTF-8 encoding — Telegram's 4096
- * cap is character-count, Discord's 2000 is character-count, Slack's
- * 40 000 is byte-count. Callers set `maxBytes` to the appropriate unit
- * and supply a pre-measured string length if they want
- * character-counting (no unicode normalization here).
+ * Unit: **always UTF-8 byte count**, never characters or UTF-16 code
+ * units. Callers whose bridge uses character-counts (Telegram's 4096,
+ * Discord's 2000) must convert upstream — pass `maxBytes = charCap * 4`
+ * as a conservative upper bound, or track character count externally.
+ * Slack's 40 000 cap is already byte-counted and maps directly. No
+ * Unicode normalization.
+ *
+ * 4-byte-safe: surrogate pairs (emoji, supplementary plane) are never
+ * cut mid-codepoint; the keep prefix always ends on a valid codepoint
+ * boundary.
  */
+
+/**
+ * Prefer a `\n` split only when it's within this many characters of
+ * the hard-byte-cut point. Past this distance, rotating at the newline
+ * would waste too much capacity per message (short continuation msgs
+ * feel janky), so we hard-cut instead.
+ */
+const NEWLINE_SPLIT_WINDOW_CHARS = 1024;
 
 export interface RotateInput {
   readonly current: string;
@@ -44,9 +57,10 @@ export function rotateOnOverflow(input: RotateInput): RotateResult {
   const hardCarry = input.current.slice(keepEndChars);
   // Prefer splitting at the last `\n` within the hardPrefix (cleaner UX).
   const lastNewline = hardPrefix.lastIndexOf('\n');
-  if (lastNewline >= 0 && lastNewline >= hardPrefix.length - 1024) {
-    // Only honor the newline if it's near the end — otherwise we'd
-    // waste too much capacity per rotation.
+  if (
+    lastNewline >= 0 &&
+    lastNewline >= hardPrefix.length - NEWLINE_SPLIT_WINDOW_CHARS
+  ) {
     const keep = hardPrefix.slice(0, lastNewline);
     const carry = hardPrefix.slice(lastNewline + 1) + hardCarry;
     return { fits: false, keep, carry };
