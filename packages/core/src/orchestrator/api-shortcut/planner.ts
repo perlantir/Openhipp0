@@ -50,14 +50,24 @@ function pathResourceTokens(path: string): Set<string> {
 }
 
 function scoreCandidate(intent: UiActionIntent, cand: ObservedApiCall): { score: number; reason: string } {
-  // Exclude static assets hard.
+  // Exclude malformed URLs + static assets hard.
+  let urlHost = '';
   let urlPath = '';
   try {
-    urlPath = new URL(cand.urlPattern).pathname;
+    const u = new URL(cand.urlPattern);
+    urlHost = u.host;
+    urlPath = u.pathname;
   } catch {
     return { score: 0, reason: 'malformed urlPattern' };
   }
   if (STATIC_ASSET_RE.test(urlPath)) return { score: 0, reason: 'static asset' };
+
+  // Host mismatch zeros the score — we never propose calling a different
+  // origin than the one the agent's UI intent is scoped to. Prevents
+  // accidentally shortcutting through a CDN or third-party analytics host.
+  if (intent.host && urlHost && urlHost !== intent.host) {
+    return { score: 0, reason: `host mismatch (${urlHost} vs intent ${intent.host})` };
+  }
 
   const expectedVerb = inferExpectedVerb(intent);
   const verbMatch = cand.method.toUpperCase() === expectedVerb ? 1 : 0;

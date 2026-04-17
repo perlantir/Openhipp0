@@ -70,4 +70,30 @@ describe('proposeShortcut', () => {
     });
     expect(res.shortcut).toBeNull();
   });
+
+  it('rejects cross-host matches even when verb + path are perfect', () => {
+    const res = proposeShortcut({
+      intent: intent('submit the signup form to create a new user', 'app.example.com'),
+      observed: [
+        call('POST', 'https://cdn.otherdomain.com/api/users'),
+        call('POST', 'https://analytics.evil.example/api/users', { occurrences: 10 }),
+      ],
+    });
+    expect(res.shortcut).toBeNull();
+    for (const e of res.evaluated) {
+      expect(e.reason).toContain('host mismatch');
+    }
+  });
+
+  it('picks the same-host candidate when both same-host and cross-host exist', () => {
+    const res = proposeShortcut({
+      intent: intent('submit the signup form to create a new user', 'app.example.com'),
+      observed: [
+        call('POST', 'https://cdn.otherdomain.com/api/users'),
+        call('POST', 'https://app.example.com/api/users', { occurrences: 3 }),
+      ],
+    });
+    expect(res.shortcut).toBeTruthy();
+    expect(res.shortcut!.urlPattern).toContain('app.example.com');
+  });
 });
