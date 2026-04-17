@@ -1027,6 +1027,54 @@ CONFIDENCE: high | medium | low
 - AFFECTS: `streaming-edit/session.ts` `#onRateLimit` + `#onSuccess` + `currentMultiplier()` / `lastRetryAfterMs()` introspection hooks.
 - CONFIDENCE: medium. First real workload will calibrate cap + decay.
 
+### Phase G2-b adapters — PR #9 Telegram
+
+**DECISION:** Adapter passes `maxMessageBytes = 4096` as a conservative under-approximation of Telegram's UTF-16-code-unit cap
+
+- REASONING: Telegram's 4096 limit is measured in UTF-16 code units (matching JavaScript `.length`). Using UTF-8 byte count as an approximation:
+  - ASCII: UTF-8 bytes = UTF-16 code units (no packing loss)
+  - Latin-1 supplement / BMP up to U+0800: UTF-8 bytes (2) > UTF-16 code units (1) → rotate earlier than Telegram's limit, up to ~50% packing loss
+  - CJK / most BMP: UTF-8 bytes (3) > UTF-16 code units (1) → rotate earlier, up to ~67% packing loss
+  - Emoji / supplementary plane: UTF-8 bytes (4) = UTF-16 code units (2 surrogate halves) × 2 bytes each = 4 bytes for 2 code units, so byte count slightly exceeds code unit count
+  All cases rotate at-or-before Telegram's cutoff, never over. Pathological packing loss is limited to CJK-heavy content and is acceptable as a first implementation; operators with CJK-heavy agents can override `maxMessageBytes` upward.
+- ALTERNATIVES_REJECTED: Adding a `unit: 'bytes' | 'utf16-code-units'` option to `rotateOnOverflow` — only Telegram needs it; byte-mode already ships correct behavior. Passing `4096 × 4` — unsafe overshoot for ASCII content.
+- AFFECTS: `adapters/telegram.ts` `TELEGRAM_CHAR_CAP = 4096`.
+- CONFIDENCE: high.
+
+**DECISION:** Bot API errors classified at a single site (`classifyTelegramError`); "message is not modified" is absorbed as a success for counter purposes
+
+- REASONING: Bot API errors are well-shaped: HTTP status + `ok:false` + `error_code` + `description` + optional `parameters.retry_after`. One exhaustive switch is auditable and ensures unknown shapes fall through to `transient` (safest default — next tick retries). Mapping:
+  - `429` + `parameters.retry_after` → `rate-limit`, `retryAfterMs = retry_after * 1000`
+  - `400 "message is not modified"` → **absorbed** (returns `undefined`, not thrown). Debouncer legitimately fires identical text on a same-value push; rejecting would spam retries.
+  - `400 "can't parse entities" / "can't find end" / "MarkdownV2" / "...entity..."` → `parse-error`
+  - `400 "message to edit not found" / "chat not found" / "message_id_invalid"` → `permanent`
+  - `403 "bot was blocked"` → `permanent`
+  - `5xx` / `ECONNRESET` / `ETIMEDOUT` / `ENETUNREACH` / `EAI_AGAIN` → `transient`
+  - anything else → `transient`
+  "message is not modified" is treated as a successful no-op for session counter purposes. It increments `#consecutiveOk` and contributes to rate-limit multiplier decay. Alternative: throw `StreamingEditError('transient', 'not-modified')` to bypass success counting — rejected here because `transient` RESETS `consecutiveOk`, which is more aggressive than "ignore this edit." If idempotent edits ever mask real rate-limit recovery in practice, introduce `EditErrorKind.'no-op'` in a PR #8 follow-up to make this behavior explicit.
+- AFFECTS: `adapters/telegram.ts` `classifyTelegramError` + fixtures in `tests/streaming-edit/adapters/__fixtures__/telegram-errors.json`.
+- CONFIDENCE: high.
+
+**DECISION:** MarkdownV2 escape strategy: preserve-known-constructs, escape-everything-else
+
+- REASONING: Full-escape of all 19 MarkdownV2 special chars would turn `*bold*` into literal `\*bold\*` — losing the one benefit of the final formatted edit. Target the constructs `formatStreamEvent` actually emits (`*bold*`, `_italic_`, `` `code` ``, triple-backtick code blocks, `[text](url)`), escape delimiters literally elsewhere. Unbalanced delimiters (e.g. `*` in arithmetic) fall through to literal-escape — predictable, no 400 from Telegram.
+- ALTERNATIVES_REJECTED: Full escape (loses all formatting). Parse-and-convert CommonMark → MarkdownV2 via a Markdown library (brittle across versions, 200+ LOC; our output shape is known). Nested formatting inside bold/italic is NOT preserved — content is treated as prose. Known limitation; rare in `formatStreamEvent` output.
+- AFFECTS: `adapters/telegram-markdown.ts` `escapeMarkdownV2`.
+- CONFIDENCE: medium. Revisit if real traffic reveals mis-escapes.
+
+**DECISION:** Approval resolver wraps `ApprovalGate.wait()` in `try { await ... } finally { cleanup() }` so Map entries + inline_keyboards are cleaned on every outcome
+
+- REASONING: Without explicit cleanup, a gate timeout (or resolver rejection) leaves the adapter's `Map<approvalId, resolveFn>` entry and the Telegram inline_keyboard buttons live. A late `callback_query` after timeout would find nothing in the Map and silently no-op — acceptable — but the Map entry leaks across many approvals and the buttons remain tappable. Wrapping the resolver's own `new Promise((resolve) => this.#pending.set(...))` in `try { ... } finally { this.#cleanup(approvalId) }` runs cleanup regardless of resolution path (user tap, gate timeout, resolver rejection). Cleanup deletes the Map entry AND strips `reply_markup` on the prompt message via `editMessageReplyMarkup`. Fire-and-forget on the strip — a failed strip doesn't change the approval outcome.
+- ALTERNATIVES_REJECTED: Having `ApprovalGate` expose `onCleanup(approvalId, fn)` registration — requires a PR #8 change for something a single adapter can wrap locally.
+- AFFECTS: `adapters/telegram.ts` `approvalResolver()` + `#cleanup(approvalId)`. Cleanup on gate resolution is idempotent. Late callback_queries arriving after cleanup are no-ops (Map lookup misses). If the session is disposed mid-approval, cleanup still runs for any pending approvalIds via the `finally` block on the awaited resolver Promise.
+- CONFIDENCE: high.
+
+**DECISION:** Adapter is a thin factory, not a wrapper around `TelegramBridge`
+
+- REASONING: Existing `TelegramBridge` handles connect/reconnect/message-intake. The edit-streaming adapter is orthogonal — it takes a grammY `Bot` handle + `chatId` and produces a `SessionOptions` slice. Keeps `TelegramBridge` untouched; keeps edit-streaming optional (bridges that don't use it pay zero cost). Matches PR #8's composition pattern.
+- AFFECTS: `adapters/telegram.ts` — no change to `telegram.ts`. `parseCallbackQuery` is extracted as a named function so the grammY `Context` type dependency lives at exactly one boundary; the adapter's `onCallbackQuery` handler accepts either `ParsedCallbackQuery` (test-friendly) or a full `Context` (production grammY handler).
+- CONFIDENCE: high.
+
 ---
 
 ## Coding Standards
