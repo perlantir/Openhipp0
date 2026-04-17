@@ -15,3 +15,13 @@ export {
   type DiscordAdapterOptions,
   type ParsedInteraction,
 } from './discord.js';
+export {
+  SlackEditStreamingAdapter,
+  classifySlackError,
+  isParsedSlackInteraction,
+  parseBlockActionsPayload,
+  type ParsedSlackInteraction,
+  type SlackAdapterOptions,
+  type WebClientSurface,
+} from './slack.js';
+export { escapeSlackMrkdwn } from './slack-mrkdwn.js';
