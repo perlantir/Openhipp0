@@ -1,0 +1,52 @@
+{
+  "unknownMessage": {
+    "type": "DiscordAPIError",
+    "code": 10008,
+    "status": 404,
+    "message": "Unknown Message"
+  },
+  "missingAccess": {
+    "type": "DiscordAPIError",
+    "code": 50001,
+    "status": 403,
+    "message": "Missing Access"
+  },
+  "forbidden": {
+    "type": "DiscordAPIError",
+    "code": 0,
+    "status": 403,
+    "message": "Forbidden"
+  },
+  "discord429": {
+    "type": "DiscordAPIError",
+    "code": 0,
+    "status": 429,
+    "message": "You are being rate limited",
+    "retryAfterSeconds": 1.5
+  },
+  "badGateway": {
+    "type": "HTTPError",
+    "status": 502,
+    "statusText": "Bad Gateway"
+  },
+  "rateLimited": {
+    "type": "RateLimitError",
+    "timeToReset": 1500,
+    "retryAfter": 1500,
+    "limit": 5,
+    "method": "PATCH",
+    "hash": "h",
+    "url": "/channels/1/messages/2",
+    "route": "/channels/:id/messages/:id",
+    "majorParameter": "1",
+    "global": false,
+    "sublimitTimeout": 0,
+    "scope": "user"
+  },
+  "internalServerError": {
+    "type": "DiscordAPIError",
+    "code": 0,
+    "status": 500,
+    "message": "Internal Server Error"
+  }
+}
