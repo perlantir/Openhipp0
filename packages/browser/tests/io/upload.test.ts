@@ -156,7 +156,7 @@ describe('UploadHandler', () => {
   });
 
   it('resolveUploadSource pulls from a URL via fetchImpl', async () => {
-    const fetchImpl = (async (url: string) =>
+    const fetchImpl = (async (_url: string) =>
       new Response(Buffer.from('remote'), { headers: { 'content-type': 'text/plain' } })) as unknown as typeof globalThis.fetch;
     const resolved = await resolveUploadSource(
       { kind: 'url', url: 'https://example.com/file.txt' },

@@ -202,13 +202,12 @@ export class ProfileManager {
     const session = await launchForProfile(activeDir, { driver: this.#driver });
 
     // Checkpoint loop.
-    let walSeq = 0;
     const state: OpenSessionState = {
       id,
       activeDir,
       passphrase,
       session,
-      walSeq,
+      walSeq: 0,
       checkpointTimer: null,
     };
     if (this.#autoCheckpoint && this.#checkpointMs > 0) {

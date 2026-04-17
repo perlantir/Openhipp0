@@ -24,7 +24,6 @@ import {
   type Profile,
   type ProfileExportEnvelope,
   type ProfileId,
-  type ProfileManifest,
 } from './types.js';
 
 export interface ExportOptions {
