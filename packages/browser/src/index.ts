@@ -3,6 +3,10 @@
 // G1-a ships profile management. Snapshots, workflows, multi-tab,
 // site memory, network inspector land in G1-b…G1-e.
 
+// BFW-002: OS-keyring adapters (secret-tool / security / cmdkey) for
+// profile-passphrase storage. Callers wire via `createDefaultKeyring()`.
+export * as keyring from './keyring/index.js';
+
 export {
   Hipp0BrowserError,
   Hipp0BrowserImportLimitationNotAckedError,
