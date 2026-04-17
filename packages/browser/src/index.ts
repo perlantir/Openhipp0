@@ -145,6 +145,66 @@ export {
   type ValidationProbe,
 } from './forms/index.js';
 
+// G1-e: stealth + vision + site memory + devtools
+export {
+  buildInitScript,
+  DEFAULT_CHROME_LINUX,
+  DEFAULT_CHROME_MAC,
+  DEFAULT_CHROME_WIN,
+  estimateEntropy,
+  humanMouseCurve,
+  humanScrollProfile,
+  ProxyRotator,
+  readingPauseMs,
+  seedOf,
+  type FingerprintDescriptor,
+  type FingerprintEntropyEstimate,
+  type MouseCurvePoint,
+  type NextContext,
+  type ProxyEntry,
+  type ProxyRotationStrategy,
+  type ProxyRotatorState,
+  type ReadingPauseInput,
+} from './stealth/index.js';
+
+export {
+  ElementLocator,
+  ScreenReasoner,
+  type LocateOptions,
+  type LocateResult,
+  type VisionClient,
+} from './vision/index.js';
+
+export {
+  SiteMemory,
+  type SiteMemoryEvent,
+  type SiteMemoryListener,
+  type SiteMemoryOptions,
+  type SiteMemoryQuery,
+  type SiteNote,
+} from './memory/index.js';
+
+export {
+  createPageStorageInspector,
+  NetworkInspector,
+  type ApiEndpoint,
+  type InspectedRequest,
+  type NetworkRequest,
+  type NetworkResponse,
+  type StorageInspector,
+  type StorageSnapshot,
+} from './devtools/index.js';
+
+// G1-f: streaming narrator (interface; G2 wires transport)
+export {
+  BufferSink,
+  EmitterSink,
+  Narrator,
+  type NarrationEvent,
+  type NarrationEventKind,
+  type NarratorSink,
+} from './streaming/index.js';
+
 // G1-d: workflows + multi-tab
 export {
   playWorkflow,
