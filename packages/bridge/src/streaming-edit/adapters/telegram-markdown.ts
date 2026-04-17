@@ -57,10 +57,13 @@ function escapeUrl(s: string): string {
  *   2. Inline code            `...`      (no newline, 1+ chars)
  *   3. Bold                   *...*      (no newline, 1+ chars)
  *   4. Italic                 _..._      (no newline, 1+ chars)
- *   5. Link                   [text](url)
+ *   5. Link                   [text](url) — URL body permits one level of
+ *                             parenthesis nesting (Wikipedia disambig,
+ *                             math, etc.). Deeper nesting falls through
+ *                             to plain-escape for the whole link.
  */
 const TOKEN_RE =
-  /(```[\s\S]*?```)|(`[^`\n]+?`)|(\*[^*\n]+?\*)|(_[^_\n]+?_)|(\[[^\]\n]+?\]\([^)\n]+?\))/g;
+  /(```[\s\S]*?```)|(`[^`\n]+?`)|(\*[^*\n]+?\*)|(_[^_\n]+?_)|(\[[^\]\n]+?\]\(((?:[^()\n\\]|\\.|\([^()\n\\]*\))+)\))/g;
 
 export function escapeMarkdownV2(text: string): string {
   if (text.length === 0) return '';

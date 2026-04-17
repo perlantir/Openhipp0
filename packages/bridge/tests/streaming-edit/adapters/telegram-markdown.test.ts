@@ -45,6 +45,16 @@ describe('escapeMarkdownV2', () => {
     expect(escapeMarkdownV2('*foo.bar*')).toBe('*foo\\.bar*');
   });
 
+  it('link with internal parens (Wikipedia disambig) preserves URL + escapes inner )', () => {
+    const src = 'read [C lang](https://en.wikipedia.org/wiki/C_(programming_language))';
+    // One level of nesting supported. URL's single `)` gets `\)`; the
+    // wrapping `(` + outer `)` are syntactic. Outer `(...)` of the
+    // Markdown link stays raw.
+    expect(escapeMarkdownV2(src)).toBe(
+      'read [C lang](https://en.wikipedia.org/wiki/C_(programming_language\\))',
+    );
+  });
+
   it('real LLM-shaped sample: prose + code + bold + link round-trips cleanly', () => {
     const src =
       'Result: the *primary* endpoint is `GET /api/v1` — see [docs](https://example.com/docs).';

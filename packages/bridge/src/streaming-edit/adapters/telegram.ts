@@ -60,24 +60,56 @@ export interface ParsedCallbackQuery {
 }
 
 /**
+ * Discriminates an already-parsed `{data, id}` shape from a full
+ * grammY `Context`. The load-bearing check is `!('callbackQuery' in x)`
+ * — grammY nests the query under `ctx.callbackQuery`, so presence of
+ * that key unambiguously means "full Context, go through the parser."
+ * Making this a named guard keeps the intent explicit and isolates
+ * the coupling to grammY's shape at exactly one site.
+ */
+function isParsedCallbackQuery(x: unknown): x is ParsedCallbackQuery {
+  return (
+    typeof x === 'object' &&
+    x !== null &&
+    'data' in x &&
+    'id' in x &&
+    typeof (x as ParsedCallbackQuery).data === 'string' &&
+    typeof (x as ParsedCallbackQuery).id === 'string' &&
+    !('callbackQuery' in x)
+  );
+}
+
+/**
  * Pulls the fields we need off a grammY `Context` / `CallbackQuery`.
  * Isolated so tests don't have to construct a full grammY context.
  */
 export function parseCallbackQuery(
   input: ParsedCallbackQuery | { callbackQuery?: { data?: string; id?: string } },
 ): ParsedCallbackQuery | null {
-  if ('data' in input && 'id' in input) {
+  if (isParsedCallbackQuery(input)) {
     return { data: input.data, id: input.id };
   }
-  const cb = input.callbackQuery;
+  const cb = (input as { callbackQuery?: { data?: string; id?: string } }).callbackQuery;
   if (!cb || typeof cb.data !== 'string' || typeof cb.id !== 'string') return null;
   return { data: cb.data, id: cb.id };
 }
 
 /**
- * Maps a Bot API error into the `StreamingEditError` taxonomy the
- * session consumes. Returns `null` if the caller should absorb the
- * error silently (e.g. "message is not modified" — DECISION 2).
+ * Classifies a Bot API error.
+ *
+ * Returns:
+ *   - `StreamingEditError` — rethrow this; session routes per `kind`
+ *     (rate-limit / transient / parse-error / permanent).
+ *   - `'absorb'`           — swallow silently, treat as success (e.g.
+ *                            "message is not modified" — DECISION 2).
+ *   - `null`               — unrecognized shape; caller should rethrow
+ *                            the original error untouched. Reserved for
+ *                            non-Error values (strings, numbers, etc.)
+ *                            where classification has no safe default.
+ *
+ * The `Error`-shaped path below never returns `null` — unknown Errors
+ * map to `'transient'` so the next tick retries. `null` exists for
+ * genuinely opaque throws.
  */
 export function classifyTelegramError(err: unknown): StreamingEditError | 'absorb' | null {
   if (err instanceof GrammyError) {
@@ -205,10 +237,7 @@ export class TelegramEditStreamingAdapter {
 
   /** grammY handler. Wire `bot.on('callback_query:data', adapter.onCallbackQuery)`. */
   readonly onCallbackQuery = async (input: Context | ParsedCallbackQuery): Promise<void> => {
-    const parsed =
-      'data' in input && 'id' in input && typeof (input as ParsedCallbackQuery).data === 'string'
-        ? (input as ParsedCallbackQuery)
-        : parseCallbackQuery(input as Context);
+    const parsed = isParsedCallbackQuery(input) ? input : parseCallbackQuery(input as Context);
     if (!parsed) return;
     const { data, id } = parsed;
     let approvalId: string;
