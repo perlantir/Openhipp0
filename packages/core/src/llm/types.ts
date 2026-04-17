@@ -150,6 +150,8 @@ export interface LLMClientConfig {
   budget?: BudgetConfig;
   retry?: RetryConfig;
   circuitBreaker?: CircuitBreakerConfig;
+  /** Phase 22 L1 exact-match cache. Supply a pre-constructed ExactCache. */
+  cache?: { get(m: Message[], o: LLMOptions): LLMResponse | null; set(m: Message[], o: LLMOptions, r: LLMResponse): void };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -28,6 +28,9 @@ export * as userModel from './user-model/index.js';
 /** Cross-session recall via FTS5. */
 export * as recall from './recall/index.js';
 
+/** Phase 21 — Provenance tagging of recall results + quarantine helpers. */
+export * as injection from './injection/index.js';
+
 /** @openhipp0/core MemoryAdapter implementation that wires all the above together. */
 export * as adapter from './adapter/index.js';
 
@@ -38,6 +41,12 @@ export * as connectors from './connectors/index.js';
 export * as api from './api/index.js';
 export { createApiRoutes } from './api/index.js';
 export type { ApiRoute, ApiRouteContext, ApiRouteResponse, ApiRouteOptions } from './api/index.js';
+
+/** Phase B1 — persist hook for core's ReflectionAdapter events. */
+export * as reflection from './reflection/index.js';
+
+/** Phase B2 — Drizzle-backed PlanStore. */
+export * as planning from './planning/index.js';
 
 // Top-level re-exports of connector helpers for ergonomic consumer imports.
 export {

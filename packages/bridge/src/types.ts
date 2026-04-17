@@ -27,7 +27,14 @@ export type Platform =
   | 'mattermost'
   | 'email'
   | 'sms'
-  | 'home-assistant';
+  | 'home-assistant'
+  // G3 additions
+  | 'imessage'
+  | 'teams'
+  | 'line'
+  | 'twitch'
+  | 'rocket-chat'
+  | 'zulip';
 
 export interface BridgeUser {
   /** Platform-scoped user id. */

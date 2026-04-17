@@ -10,6 +10,7 @@ import type { LLMClient } from '../llm/client.js';
 import type { ContentBlock, Message } from '../llm/types.js';
 import type { ExecutionContext } from '../tools/types.js';
 import type { ToolRegistry } from '../tools/registry.js';
+import type { ReflectionAdapter, ReflectionConfig } from '../reflection/types.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent identity + prompt building
@@ -99,6 +100,11 @@ export interface AgentRuntimeConfig {
   hooks?: AgentRuntimeHooks;
   /** Model-level overrides. */
   model?: { temperature?: number; maxTokens?: number };
+  /**
+   * Reflection subsystem — opt-in draft critique + async outcome assessment.
+   * When absent, reflection is disabled (no runtime cost).
+   */
+  reflection?: { adapter?: ReflectionAdapter; config?: ReflectionConfig };
 }
 
 export interface AgentRuntimeHooks {
@@ -143,4 +149,6 @@ export interface AgentResponse {
   stoppedReason: StoppedReason;
   startedAt: number;
   finishedAt: number;
+  /** Reflection: number of revision passes applied to the final reply. */
+  revisionsApplied?: number;
 }

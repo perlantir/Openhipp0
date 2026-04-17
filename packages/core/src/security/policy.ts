@@ -9,6 +9,13 @@
  *   4. Approval check (if action is in policy.requireApproval, an approval
  *      request must be satisfied before proceeding).
  *
+ * Path hardening (Phase 3-H4):
+ *   - Blocked paths are compared against the normalized absolute form of
+ *     the input (`path.resolve` + `expandHome`). Traversal sequences (`..`,
+ *     relative refs, trailing-slash evasion) are resolved BEFORE matching.
+ *   - Blocked patterns are normalized the same way and match both the
+ *     directory itself AND anything under it (prefix match, not glob).
+ *
  * The enforcer is pure logic — it has no side effects and no I/O. The actual
  * "ask the user to approve" flow lives in governance.ts.
  */
@@ -79,11 +86,19 @@ export function enforce(policy: AgentPolicy, req: ToolCallRequest): EnforcementR
   return { allowed: true };
 }
 
+/**
+ * True iff the requested path is (or is inside) any ALWAYS_BLOCKED root,
+ * regardless of traversal / normalization tricks. Specifically:
+ *   - `~/.ssh` with no trailing slash  → blocked (was allowed).
+ *   - `~/foo/../.ssh/id_rsa`           → blocked (was allowed).
+ *   - `/tmp/../root/.ssh/id_rsa`       → blocked (was allowed).
+ *   - Plain case where `./myfile` is fine → still fine.
+ */
 function isBlockedPath(p: string): boolean {
-  const expanded = expandHome(p);
+  const normalized = normalizePath(p);
   return ALWAYS_BLOCKED_PATHS.some((pattern) => {
-    const expandedPattern = expandHome(pattern);
-    return minimatch(expanded, expandedPattern);
+    const patternRoot = normalizePath(stripGlobSuffix(pattern));
+    return isUnderOrEquals(normalized, patternRoot);
   });
 }
 
@@ -91,6 +106,31 @@ function matchesAny(p: string, patterns: readonly string[]): boolean {
   if (patterns.length === 0) return false;
   const expanded = expandHome(p);
   return patterns.some((pattern) => minimatch(expanded, expandHome(pattern)));
+}
+
+/**
+ * Full normalization: expand `~/`, resolve relative segments, produce an
+ * absolute path that cannot be bypassed via traversal. No filesystem I/O
+ * (so undefined symlink behavior — Phase 5+ can add realpath when the
+ * caller runs under an fs context). For the always-blocked guard, syntactic
+ * normalization is sufficient because the root is always a literal prefix
+ * like `$HOME/.ssh`.
+ */
+function normalizePath(p: string): string {
+  const expanded = expandHome(p);
+  return path.resolve(expanded);
+}
+
+function stripGlobSuffix(pattern: string): string {
+  // `~/.ssh/**` → `~/.ssh`, `~/.hipp0/secrets/**` → `~/.hipp0/secrets`.
+  return pattern.replace(/\/\*\*$/, '').replace(/\/\*$/, '');
+}
+
+/** Prefix-match a normalized path against a normalized directory root. */
+function isUnderOrEquals(p: string, root: string): boolean {
+  if (p === root) return true;
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  return p.startsWith(rootWithSep);
 }
 
 function matchesDomain(domain: string, allowed: readonly string[]): boolean {

@@ -50,3 +50,32 @@ export {
   type SessionToCompress,
   type Turn,
 } from './compress-session.js';
+
+export {
+  DEFAULT_HALF_LIFE_DAYS,
+  MIN_RECENCY_FLOOR,
+  computeSkillRank,
+  listSkillsForRecall,
+  listSkillsForRecallWithReward,
+  promoteSkillToProject,
+  type RankOptions,
+  type RankedSkill,
+  type ShadowRankedSkill,
+  type ListSkillsForRecallOptions,
+} from './skills-rank.js';
+
+export {
+  DEFAULT_PRIOR_N,
+  DEFAULT_DECAY_DAYS,
+  DEFAULT_CROSS_USER_THRESHOLD,
+  DEFAULT_MAX_DAILY_DROP,
+  clampDailyChange,
+  computeSkillReward,
+  computePerUserSkillReward,
+  implicitRewardFromTrajectory,
+  listRecentFeedback,
+  type RewardOptions,
+  type SkillReward,
+  type PerUserSkillReward,
+  type TrajectorySignal,
+} from './reward-model.js';

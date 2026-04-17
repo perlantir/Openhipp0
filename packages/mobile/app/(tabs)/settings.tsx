@@ -7,6 +7,7 @@ import { useTheme } from "../../src/theme/useTheme.js";
 import { useSession } from "../../src/store/session.js";
 import { useHealth } from "../../src/api/hooks.js";
 import { ScreenHeader } from "../../src/screens/ScreenHeader.js";
+import { LlmConfigSection } from "../../src/screens/LlmConfigSection.js";
 import { clearStoredPairing } from "../../src/auth/secure-store.js";
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -88,6 +89,8 @@ export default function SettingsTab() {
                 : health.data?.status ?? "unknown"
           }
         />
+
+        <LlmConfigSection />
 
         <Text
           style={[

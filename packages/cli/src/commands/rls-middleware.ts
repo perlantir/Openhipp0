@@ -33,9 +33,17 @@ export interface BuildRlsOptions {
   getDb: () => Promise<RlsDb | null> | RlsDb | null;
   /** Fallback project id when the caller doesn't send X-Hipp0-Project-Id. */
   defaultProjectId?: string;
+  /**
+   * When true (default), agent-key callers on an RLS-incapable deployment
+   * (SQLite: `getDb()` returns null) are rejected with 500 instead of
+   * silently flowing through with no isolation. Flip to false only for
+   * single-tenant SQLite deploys where ops knows the agent-key is trusted.
+   */
+  rejectAgentKeyWithoutRls?: boolean;
 }
 
 export function buildRlsMiddleware(opts: BuildRlsOptions): AuthMiddleware {
+  const rejectAgentKeyWithoutRls = opts.rejectAgentKeyWithoutRls ?? true;
   return (handler) =>
     async (ctx) => {
       const auth = (ctx.req as { auth?: AuthResolution }).auth;
@@ -44,7 +52,19 @@ export function buildRlsMiddleware(opts: BuildRlsOptions): AuthMiddleware {
         return handler(ctx);
       }
       const db = await opts.getDb();
-      if (!db) return handler(ctx);
+      if (!db) {
+        // N7 fix: silent no-op would expose an agent key to the whole DB
+        // on SQLite. Fail closed by default.
+        if (rejectAgentKeyWithoutRls) {
+          return {
+            status: 500,
+            body: {
+              error: 'multi-tenant isolation unavailable on this deployment',
+            },
+          };
+        }
+        return handler(ctx);
+      }
 
       const headers = (ctx.req as { headers?: Record<string, string | undefined> }).headers ?? {};
       const projectHeader = headers['x-hipp0-project-id'];

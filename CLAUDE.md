@@ -66,11 +66,16 @@ open-hipp0/
 | `scheduler` | `core`, `memory`                          | `bridge`, `dashboard`                                 |
 | `watchdog`  | `core`                                    | anything else (runs independently)                    |
 | `dashboard` | `sdk` only                                | `core`, `memory`, etc. directly                       |
-| `cli`       | `core`, `memory`, `scheduler`, `watchdog` | `dashboard`                                           |
+| `cli`       | `core`, `memory`, `scheduler`, `watchdog`, `bridge`, `browser` | `dashboard`                              |
 | `sdk`       | `core`, `memory` (types only)             | `bridge`, `scheduler`, `watchdog`, `dashboard`, `cli` |
+| `mcp`       | `core`, `memory`, `scheduler`, `watchdog`, `browser` | `bridge`, `dashboard`                         |
+| `browser`   | `core` (primitives in `core/browser`)     | everything else                                       |
 
 Rationale: keeps circular imports impossible, keeps build graph linear, keeps
-dashboard portable to any SDK consumer.
+dashboard portable to any SDK consumer. `browser` (added G1-a) holds higher-level
+automation capabilities (profiles, snapshots, workflows, multi-tab, site memory,
+network inspector) — primitives (`BrowserDriver`, `BrowserEngine`, SSRF guard,
+stealth, credential vault) stay in `core/browser` where existing consumers live.
 
 ---
 
@@ -809,6 +814,64 @@ CONFIDENCE: high | medium | low
 
 ---
 
+### Phase G1-a — New `@openhipp0/browser` package + profile management
+
+**DECISION:** Create `@openhipp0/browser` package; `core/browser` primitives stay in place
+
+- REASONING: `core/browser` (engine, driver interface, SSRF guard, stealth primitives, credential vault) is already depended on by core tools and memory's browser adapter. Moving it out would cascade across ~30 call sites for no functional gain. G1 ~doubles the browser surface area (profiles, snapshots, workflows, multi-tab, site memory, network inspector); a new package keeps the foundational tier thin.
+- ALTERNATIVES_REJECTED: Mass move to new package (big refactor, no benefit); extend in place under `core` (bloats foundational tier).
+- AFFECTS: new `packages/browser/`, import matrix, `architecture.md` diagram, `cli` + `mcp` gain a workspace dep on `browser`.
+- CONFIDENCE: high.
+
+**DECISION:** Encrypted-at-rest = decrypt-to-tmp + periodic checkpoint + tmpfs preference on Linux
+
+- REASONING: Chromium mutates its profile dir continuously during a session, so in-place encryption is impossible. On open: decrypt AES-256-GCM archive to `<profile>/.active/`, launch Chromium pointing at that dir. During session: every 60s (or 500 filesystem mutations, whichever first), write a fresh full encrypted checkpoint to `<profile>/data.wal-<seq>.enc`, keeping the last N=3 for rollback. On clean close: consolidate latest WAL → `data.enc`, shred WAL + `.active/`. On unclean shutdown: startup scrub finds orphan `.active/` dirs, replays the highest-`seq` WAL (or falls back to `data.enc`) into `<profile>/recovered/`, marks `lastUncleanExitAt` on the manifest, emits `HIPP0-0505`. On Linux, prefer `/dev/shm` (or `$XDG_RUNTIME_DIR` if tmpfs) for `.active/` when write-permitted; document disk fallback. On macOS/Windows: disk with 0700 mode.
+- ALTERNATIVES_REJECTED: Per-file encryption via FUSE overlay (OS-specific, needs root on Linux); encrypt only sensitive files (renderer reads them plaintext at runtime — no attacker-window benefit); treat "at rest" as export-format-only (contradicts spec).
+- AFFECTS: `profile-store.ts`, `profile-launcher.ts`, checkpoint watcher, startup scrub.
+- CONFIDENCE: medium. File-level full-checkpoint cost is measured on the first real profile; if overhead >5% of a typical session, G1-b revisits with a delta-based WAL.
+
+**DECISION:** One Chromium process per open profile
+
+- REASONING: Required for G1-e — renderer-side fingerprint injection (Canvas/WebGL/Audio noise) must happen at browser launch, not per-context. Playwright `browserContext`s share a renderer process, so context-level isolation isn't enough. Cost is ~150 MB idle per Chromium.
+- AFFECTS: `profile-launcher.ts` tracks one `Browser` handle per profile id.
+- CONFIDENCE: high.
+
+**DECISION:** Scrypt passphrase derivation; TTY-detection hard-fails in non-interactive environments with no env var
+
+- REASONING: Source chain — `HIPP0_BROWSER_PASSPHRASE` env, then interactive `readline` with `setRawMode` echo-off if `process.stdin.isTTY && process.stdout.isTTY`, else throw `HIPP0_BROWSER_NON_INTERACTIVE` (`HIPP0-0503`) directing the operator to set the env var. Scrypt N=2¹⁷, r=8, p=1 via `node:crypto.scrypt`. Per-profile 32-byte salt stored in `manifest.json`. OS-keyring integration filed as BFW-002.
+- ALTERNATIVES_REJECTED: Raw key file on disk (defeats at-rest); PBKDF2 (scrypt is stronger at similar cost); silent wait on stdin (hangs CI/systemd).
+- AFFECTS: `crypto.ts`, `profile-store.ts`, CLI.
+- CONFIDENCE: high.
+
+**DECISION:** Concurrent-open = hard fail with structured diagnostic including lock staleness
+
+- REASONING: Lock file `<profile>/.active/LOCK` carries `{ pid, startedAt, host }`. `ProfileManager.open` reads the lock; cross-checks PID existence + process start time vs lock creation time to classify `lockStaleness` as `'live' | 'likely_stale' | 'unknown'`; throws `Hipp0BrowserProfileBusyError` with `{ code, externalCode: 'HIPP0-0502', owningPid, sessionStartedAt, host, lockStaleness, resolutionOptions: ['wait', 'kill', 'status'] }`. CLI renders staleness to distinguish PID reuse from a live session.
+- ALTERNATIVES_REJECTED: Wait-with-timeout (UX confusion); best-effort double-open (fingerprint collisions, corrupt state).
+- AFFECTS: `profile-manager.ts`, `errors.ts`, CLI.
+- CONFIDENCE: high.
+
+**DECISION:** Chrome-profile import copies verbatim; OS-keyring cookie decrypt deferred as BFW-001
+
+- REASONING: Chrome encrypts cookie values with DPAPI / Keychain / libsecret. Decrypting requires three OS-specific bridges + same-user-session guarantees. G1-a scope: copy the source profile dir into our managed location and encrypt with our key. CLI requires `--accept-cookie-limitation` flag OR interactive confirmation; `docs/browser/profile-management.md` has a prominent Known Limitations section; `docs/browser/followups.md` tracks the decrypt work as BFW-001 so it can't vanish.
+- ALTERNATIVES_REJECTED: Block import (localStorage/IndexedDB/extensions still useful on same user/machine); implement decrypt now (triples scope).
+- AFFECTS: `profile-import.ts`, CLI, two docs files.
+- CONFIDENCE: medium.
+
+**DECISION:** Export envelope is versioned and carries explicit KDF params; re-wrapped at export time
+
+- REASONING: `.hipp0profile` = single JSON with `PROFILE_EXPORT_ENVELOPE_VERSION = 1` + `kdf: { algo:'scrypt', N, r, p, saltB64 }` + `cipher: { algo:'aes-256-gcm', ivB64, authTagB64, ciphertextB64 }` + `manifest`. Recipient supplies a passphrase at export; re-wrap means exporter doesn't share their original passphrase. Explicit KDF params future-proof against scrypt tuning changes.
+- ALTERNATIVES_REJECTED: Source-encrypted blob as-is (requires sharing original passphrase); hard-coded KDF params (breaks on future tuning).
+- AFFECTS: `profile-export.ts`, envelope schema.
+- CONFIDENCE: high.
+
+**DECISION:** Profile manifest is versioned forward-only; `MIGRATIONS` table for future sub-phases
+
+- REASONING: `PROFILE_MANIFEST_VERSION = 1`. Future fields (fingerprint in G1-e, workflow bindings in G1-d) land via `MIGRATIONS: Record<number, ManifestMigration>`. Unknown versions refuse to load with a clear error. Matches Phase 4a `SNAPSHOT_VERSION` pattern.
+- AFFECTS: `profiles/types.ts`.
+- CONFIDENCE: high.
+
+---
+
 ## Coding Standards
 
 ### TypeScript
@@ -855,6 +918,304 @@ CONFIDENCE: high | medium | low
 - **Honcho** — user modeling dimensions: communication style, expertise, workflow preferences, risk tolerance.
 - **OpenClaw** — the closed-source competitor we're replacing. Specific claims about its behavior/flaws require verification before appearing in user-facing docs.
 - **agentskills.io** — the skill manifest format. Each skill ships a `SKILL.md`, `manifest.json`, and optional `tools.ts`.
+
+---
+
+### Phase 26 — Debuggability + launch checklist (`core/debuggability`)
+
+**DECISION:** Structured error codes live in a single registry file, not as metadata on each error class
+
+- REASONING: A central registry means (1) the CLI can list every known code without walking the codebase, (2) docs can auto-generate from the registry, (3) the `HIPP0-XXXX` external numbering stays consistent. Attaching `fix` + `docsUrl` to every error class would either duplicate the strings or force every throw-site to reach for a registry anyway.
+- AFFECTS: `packages/core/src/debuggability/error-codes.ts`; the rule in `CONTRIBUTING.md` is "every new error class gets a registry entry".
+- CONFIDENCE: high.
+
+**DECISION:** Debug bundle is paste-into-issue, not upload-to-server
+
+- REASONING: Per scope doc. The project runs no infrastructure; an upload endpoint would require us to run a log ingest, handle PII, deal with GDPR. Pasting a redacted JSON payload into a GitHub issue is slower for the user but keeps our operational surface at zero.
+- AFFECTS: `debuggability/bundle.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Redaction is aggressive — false positives are preferred over leaks
+
+- REASONING: The cost of leaking an API key is much higher than the cost of redacting a benign config field. Every redaction labels the kind (`<REDACTED:anthropic-key>`, `<REDACTED:field>`) so operators can sanity-check after the fact. The env-secret rule uses a lookbehind to redact only the value, leaving the key name visible for context.
+- AFFECTS: `redactor.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Verbose mode is an emitter, not a direct stderr write
+
+- REASONING: Dashboard live-view, test assertions, and dev-mode logging all want the same events in different sinks. An emitter with an in-memory history buffer (default 500) lets consumers subscribe per their output format. `formatVerbose(event)` gives the canonical one-line string for stderr; the dashboard can still render the structured event.
+- AFFECTS: `verbose.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Community infra ships as repo files, not as a hosted service (Discord / forum deferred)
+
+- REASONING: Per scope doc. Repo-side files (CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, issue + PR templates, RFC template adopted from Rust) are what matters for day-one launch. Discord / forum happen when adoption materializes.
+- AFFECTS: Root repo files + `.github/`.
+- CONFIDENCE: high.
+
+**DECISION:** `scripts/launch-checklist.sh` is a single Bash runner that runs every gate; CI mirrors it
+
+- REASONING: Single script with declarative gates (build / typecheck / lint / test / python / playwright / docker / audit) means a release cut is "run this and read the summary" instead of copy-pasting 6 commands. Both CI and a human on a laptop run the same flow.
+- AFFECTS: `scripts/launch-checklist.sh`.
+- CONFIDENCE: high.
+
+**DECISION:** Multi-language docs + bug bounty + paid pen test + 30-day no-leak run explicitly **cut** from v1
+
+- REASONING: Per scope doc. Multi-language docs burn a small team; community translations as they come. Bug bounty creates legal + financial exposure without a sponsor. Paid pen test is budget-bound; community review + `pnpm audit` is the v1 floor. 30-day no-leak run is not CI-runnable.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
+### Phase 25 — Offline mode (`core/offline`)
+
+**DECISION:** Generalize mobile's sync primitives into `core/offline`; mobile keeps its vendored copy until opportunistic migration
+
+- REASONING: Per scope doc: "Generalize the Phase-19 mobile sync infrastructure. Don't build a parallel offline system." Lifting the primitives into core lets desktop CLI + server share one implementation. Mobile's 31 tests + its RN-specific wiring make a forced migration regression-risky for zero functional payoff. Same play as retro-d deferred the phase17 split — migrate on-touch, delete the mobile copy when everything references core.
+- AFFECTS: `packages/core/src/offline/`; mobile sync/* unchanged.
+- CONFIDENCE: medium.
+
+**DECISION:** Cache-first reads are explicit per-call (`cacheFirstRead`), not a monkeypatched wrapper around every read path
+
+- REASONING: Wrappers that automatically intercept reads force every caller to reason about async layers they didn't ask for. An explicit helper at each read site keeps the intent visible: "this read is cache-first, falling back to remote, and fine with stale on failure." Matches the Phase-6.1 scheduler pattern (explicit `runCron` calls vs. a monkeypatched Date.now).
+- AFFECTS: `cache.cacheFirstRead`.
+- CONFIDENCE: high.
+
+**DECISION:** `OnlineStatus` has three states (`online` | `degraded` | `offline`), not two
+
+- REASONING: A binary online/offline model flags every multi-second probe as "offline" and flips the UI into degraded mode unnecessarily. The three-state model surfaces the "we're slow" middle ground the dashboard can indicate without blocking reads. Mobile Phase 19's UI already has three indicator states; mirroring here prevents divergence.
+- AFFECTS: `OnlineStatusTracker`.
+- CONFIDENCE: high.
+
+**DECISION:** Local LLM fallback limited to summarize + classify only
+
+- REASONING: Per scope doc. Ollama's tool-call support on small models is unreliable — running agent loops offline produces plausible-but-broken tool sequences that then fail silently when a network comes back. Summarize + classify are strictly better than no answer (medium-quality summary > empty summary; best-guess classification > null). Tool use stays cloud-only until there's a reliable local-tool-call story.
+- ALTERNATIVES_REJECTED: Full local agent loop — see above.
+- AFFECTS: `LocalLLMFallback` interface.
+- CONFIDENCE: high.
+
+**DECISION:** `strategyForKind` extended with server-side kinds (`audit-event`, `llm-usage`, `backup-manifest`)
+
+- REASONING: These are immutable or monotonically-appended on the server. Last-write-wins for an audit event would let a client overwrite an already-recorded event, defeating the audit log. Server-wins is correct + safe for these record types.
+- AFFECTS: `strategyForKind`.
+- CONFIDENCE: high.
+
+---
+
+### Phase 24 — Cloud backup + restore (`core/backup`)
+
+**DECISION:** Per-table AES-256-GCM blobs + separately-encrypted manifest, not a single monolithic ciphertext
+
+- REASONING: A single blob means the whole backup has to decrypt before anything can be inspected. Per-table blobs (each with its own salt + nonce) mean: (1) tampering with one table doesn't fail the entire restore, (2) selective restore is possible without a schema change, (3) S3 listings never leak table names because the manifest is separately encrypted. Matches the `credential-vault.ts` shape already proven in Phase 9.
+- ALTERNATIVES_REJECTED: One giant blob — saves a handful of bytes, costs recovery flexibility.
+- AFFECTS: `BackupArtifact`, `encryptJson`.
+- CONFIDENCE: high.
+
+**DECISION:** Round-trip integrity check after create + checksum match before apply
+
+- REASONING: A corrupted write surfaces inside createBackup (we decrypt + re-checksum each blob before handing to the backend), not days later during restore. Restore re-verifies the per-table checksum against the manifest before calling the sink — same content-addressed guarantee as the marketplace installer.
+- AFFECTS: `createBackup`, `restoreBackup`.
+- CONFIDENCE: high.
+
+**DECISION:** DataSource + DataSink are caller-supplied interfaces, not direct Drizzle adapters
+
+- REASONING: The backup module must live in `core` (so `cli` can import it) but the actual table schemas live in `memory`. Structural source/sink interfaces let the CLI wire a memory-package-aware adapter; tests wire in-memory fakes. Identical pattern to Phase 2f MemoryAdapter.
+- AFFECTS: `orchestrator.ts`. CLI wiring of a real `memoryDataSource`/`memoryDataSink` follows in the next touch.
+- CONFIDENCE: high.
+
+**DECISION:** Two backends in v1 (local + S3-compatible). Google Drive / Dropbox / hosted "Open Hipp0 Cloud" cut
+
+- REASONING: Per scope doc. Local covers sneakernet + external-drive deploys. S3-compatible covers AWS + Backblaze B2 + Cloudflare R2 + Wasabi + MinIO with one adapter because the API is well-defined. Google Drive / Dropbox require per-provider OAuth churn for one more storage choice. Hosted cloud is out of scope — the project runs no infrastructure.
+- AFFECTS: `backends.ts` has `createLocalBackend` + `createS3Backend`.
+- CONFIDENCE: high.
+
+**DECISION:** S3Client is a structural interface, not `@aws-sdk/client-s3`
+
+- REASONING: The full AWS SDK is ~10 MB and pulls in all regions. Operators choose their own client (AWS SDK v3, `minio`, `@aws-sdk/client-s3`, custom fetch-based wrapper) and pass it in. Test suite exercises the full adapter without any real SDK.
+- AFFECTS: `S3Client` interface, `createS3Backend`.
+- CONFIDENCE: high.
+
+**DECISION:** Daily-full snapshots + S3 lifecycle rules for retention. Incremental / BIP-39 cut
+
+- REASONING: Per scope doc. SQLite page-level deltas are hard to get right across schema migrations; daily full + S3 lifecycle (expire objects older than 30d) is simpler and survives restore corner cases. BIP-39 recovery phrases are dangerous UX (lose the phrase → data bricked) — documentation will say "key loss = data loss" instead of implying recovery.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
+### Phase 23 — Skills marketplace (`core/skills/marketplace`)
+
+**DECISION:** Skill bundles are JSON envelopes, not tarballs
+
+- REASONING: A JSON bundle (manifest + SKILL.md + optional tools.ts source) with a canonical-ordering SHA-256 `contentHash` keeps the install path dependency-free (no tar, no gzip, no streaming ops), byte-by-byte auditable before the install writes to disk, and integrity-checkable without extra tooling. Skills are small — an entire bundle fits comfortably in a single JSON payload.
+- ALTERNATIVES_REJECTED: OCI artifacts (over-engineered for our scale), npm tarballs (inherits npm semantics we don't want).
+- AFFECTS: `packages/core/src/skills/marketplace/types.ts` SkillBundle.
+- CONFIDENCE: high.
+
+**DECISION:** `contentHash` is computed over a canonical serialization (`{manifest, skillMd, toolsSource}`) and verified at install time
+
+- REASONING: Forces every install to come through a content-addressed path. A malicious index that ships a fake bundle has to match the published hash or the installer refuses. Pairs with the pin + rollback features: `previousContentHash` on the ledger lets rollback verify the exact bytes before restoring.
+- AFFECTS: `installer.assertHashMatches`, `computeBundleHash`.
+- CONFIDENCE: high.
+
+**DECISION:** Installer takes a structural `InstallerFs` interface, not `node:fs` directly
+
+- REASONING: Matches the Phase-7a CLI pattern. In-memory fakes give deterministic unit tests; production passes the `defaultInstallerFs` wrapper around `node:fs/promises`. The structural surface is tight (read/write/mkdir/rm/rename/stat) so alternative backends (e.g. encrypted storage, content-addressable blob store) plug in without touching the install logic.
+- AFFECTS: `InstallerFs`.
+- CONFIDENCE: high.
+
+**DECISION:** Pin/unpin/rollback track state in a single `installed.json` ledger per root, not per-skill files
+
+- REASONING: Atomic read-modify-write on one file is simpler + harder to leave in an inconsistent state than a file-per-skill layout. The file is small (a few KB even with hundreds of skills). Ledger is human-readable so operators can inspect / diff / back up via `git`.
+- AFFECTS: `packages/core/src/skills/marketplace/installer.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Rollback requires the caller to supply the previous bundle
+
+- REASONING: The installer deliberately doesn't cache bundle bytes — a `~/.hipp0/skills/.trash/` accumulates unused state and becomes a backup-restore hazard. The CLI refetches the previous bundle by version from the marketplace and passes it in; the installer verifies the `contentHash` matches the recorded `previousContentHash` before restoring.
+- ALTERNATIVES_REJECTED: Cache previous versions locally — quiet storage growth + matches the "source of truth is the marketplace" model we want.
+- AFFECTS: `installer.rollback`, CLI `runMarketplaceRollback`.
+- CONFIDENCE: medium.
+
+**DECISION:** Static-analysis malicious-pattern scanner + signed-publisher PKI + revenue-sharing + auto-sharing explicitly **cut** from v1
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. Static analysis is security theater (attackers route around regex); signed publisher needs real PKI infrastructure (sigstore/cosign, v2); revenue/billing isn't technical; auto-sharing is a privacy minefield. The runtime defenses (Phase 1f sandbox + Phase 5.2 policy engine) are the real safety layer — the marketplace treats every installed skill as untrusted code.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
+### Phase 22 — Cost optimization
+
+**DECISION:** Ship L1 (exact cache), L4 (model router), L6 (prompt cache hooks), L7 (batch adapter) in v1; defer L2 (semantic cache) + L3 (plan cache) + L5 (LLMLingua)
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. L1 is trivial + meaningful, L4 is the biggest structural win, L6 is the biggest per-call win, L7 discounts scheduled paths. L2 has a privacy footgun (one user's paraphrase hits another's cache); L3 rots fast against UI/API changes; L5 only helps long retrieved contexts. Measure first via Phase 20 suites before shipping the cuts.
+- AFFECTS: `packages/core/src/llm/exact-cache.ts`, `router.ts`, `prompt-cache.ts`, `batch.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** ExactCache is an LLMClient constructor option, not a wrapper
+
+- REASONING: The client already owns the provider loop and usage-record pipeline. Putting the cache check inside `chatSync` means: (1) the budget preflight doesn't fire on hits (zero spend correctly reported), (2) the usage hook doesn't double-count cached responses, (3) the cache can zero out the `usage` tokens it returns so metrics reflect actual spend. A wrapper would have to re-implement all of that or plumb state through a side channel.
+- AFFECTS: `LLMClientConfig.cache`, `LLMClient.chatSync`.
+- CONFIDENCE: high.
+
+**DECISION:** LLMClientConfig.cache is structural `{get, set}`, not a concrete `ExactCache` type
+
+- REASONING: Lets operators plug in their own cache (Redis-backed, rate-limited, per-tenant). The in-memory `ExactCache` is the default reference implementation. Structural typing matches the Phase-1e factory/provider pattern.
+- AFFECTS: `LLMClientConfig`.
+- CONFIDENCE: high.
+
+**DECISION:** Model router ladder is haiku → sonnet → opus (never downgrade)
+
+- REASONING: Failover only upgrades. A Haiku call that returns an unreliable classifier-tier answer should try Sonnet, not another Haiku. Downgrade-on-failure (Opus fails → try Sonnet) saves pennies but hides a real production problem (your primary provider is broken) under a successful cheaper call.
+- AFFECTS: `router.laddersFrom`.
+- CONFIDENCE: high.
+
+**DECISION:** Cache breakpoint hints (system/tools/firstN) are opt-in flags on options, not automatic
+
+- REASONING: Ephemeral breakpoints cost +25% of prefix tokens on write. A prefix must be reused at least twice to break even. Automatic "cache everything that looks stable" heuristics could lose money on short-lived sessions. Callers opt in per-surface; providers translate the hint into `cache_control: {type: 'ephemeral'}`.
+- AFFECTS: `prompt-cache.ts`; provider wiring is next-step.
+- CONFIDENCE: high.
+
+**DECISION:** Batch API adapter ships as an in-memory reference provider + shape contract; Anthropic batches SDK wiring deferred
+
+- REASONING: Persistent batch-handle state (batchId → results), SDK polling, and webhook/async callbacks all need real infrastructure on top of what the core package owns. Shipping the contract + a synchronous reference implementation lets the scheduler (Phase 6.1) build against it today; the Anthropic-specific adapter is a thin follow-up.
+- AFFECTS: `batch.ts`.
+- CONFIDENCE: medium.
+
+**DECISION:** Costs dashboard page reads `/api/costs` directly; no client-side aggregation
+
+- REASONING: The server already joins + sums `llm_usage` in the route handler (projectId / agentId / provider filters). Sending raw rows + letting the client aggregate duplicates work and forces pagination decisions on the dashboard. Server-side aggregation matches the existing Audit/Skills/Health page patterns.
+- AFFECTS: `packages/dashboard/src/pages/Costs.tsx`, `packages/memory/src/api/routes.ts` GET /api/costs.
+- CONFIDENCE: high.
+
+---
+
+### Phase 21 — Prompt injection defense (`core/security/injection`)
+
+**DECISION:** Source-tagging types (`TrustLevel`, `Origin`, `ProvenanceTag`, `TaggedFragment`) live in core, structurally mirrored in memory
+
+- REASONING: Core cannot import from memory. Making core the authoritative home for the injection-defense vocabulary + duplicating the types as a structural match in memory follows the same pattern as `AgentSystemPromptSection` (Phase 2f). Both sides agree on literal strings for `TrustLevel` ('high'|'medium'|'low'|'untrusted'), so a memory hook that returns `{ trust: 'low' }` slots into a core `ProvenanceTag` without coercion.
+- AFFECTS: `packages/core/src/security/injection/types.ts`, `packages/memory/src/injection/tag.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Spotlighting wraps low + untrusted, not just untrusted
+
+- REASONING: Slack / email-to-ticket content defaults to `low` in the connectors matrix specifically because it can contain outside messages. Treating `low` as "safe to inject inline" negates the whole defense. Spotlight both; `partitionFragments` with `dropAtOrBelow: 'low'` is the tighter-setting escape hatch for operators that want to drop entirely instead of spotlight.
+- AFFECTS: `spotlight.renderFragment`, `quarantine.partitionFragments`.
+- CONFIDENCE: high.
+
+**DECISION:** Pattern detector logs, never blocks
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. Pattern libraries die against novel attacks; relying on them for blocking creates false confidence. The real defenses are spotlighting + quarantine (tag-level) and the policy engine + sandbox (execution-level). `looksSuspicious()` is advisory only and is wired into logs + UI hints, never into a deny path.
+- AFFECTS: `injection/detector.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Delimiter forgery in untrusted payloads is defanged by character substitution (`<` → `‹`), not by randomizing a hard-to-guess token
+
+- REASONING: Randomized tokens move the goal but don't eliminate it; a model can still be tricked by a forged `<<END UNTRUSTED>>` if it appears plausibly formed. Substituting the `<` in any copy that shows up inside the payload means the model literally cannot see a closing delimiter until our own wrapper writes one. Randomized seed stays as a secondary signal, useful for audit ("this UNTRUSTED tag id matches what the server emitted").
+- AFFECTS: `spotlight.escapeDelimiters`.
+- CONFIDENCE: medium — revisit if we see model-side delimiter confusion in production logs.
+
+**DECISION:** Memory-side tagging via a `SessionTagSupplier` callback, not a schema column (for now)
+
+- REASONING: Adding `origin` + `trust` columns to `memoryEntries` / `sessionHistory` would require a migration + backfill + schema drift against the API contract. The callback shape lets consumers who already know the origin/trust (e.g. connector-sourced memory items; Retro-B persists this on the callback side, just not the row side) plug it in today. Persisting to rows is the natural next step and is tracked in the remaining-work list.
+- AFFECTS: `packages/memory/src/injection/tag.ts`.
+- CONFIDENCE: medium.
+
+**DECISION:** Canary tokens + behavior-monitoring ML explicitly **cut** from v1
+
+- REASONING: Per scope doc. Canaries false-positive on legitimate "list my credentials" asks; behavior-monitoring needs a labeled dataset we don't have. Spotlighting + quarantine do the load-bearing work; everything else is noise until there's signal to train on.
+- AFFECTS: Documentation; no code.
+- CONFIDENCE: high.
+
+---
+
+### Phase 20 — Evaluation framework (`@openhipp0/eval`)
+
+**DECISION:** New package `@openhipp0/eval`, not a subdir of `core` or `e2e`
+
+- REASONING: Eval is cross-cutting (touches core + memory + bridge + scheduler) like `e2e`, and benefits from the same sibling-workspace shape. Placing it under `core` would pull benchmark-specific types into the foundational package; under `e2e` it would mix "deterministic CI checks" with "benchmark scoring" semantics.
+- AFFECTS: `packages/eval/`.
+- CONFIDENCE: high.
+
+**DECISION:** `EvalCase` owns `setup` / `run` / `verify` / `teardown`; runner stays runtime-agnostic
+
+- REASONING: Published benchmarks (τ-bench, SWE-bench, AgentBench, GAIA) each need different setup: a scripted user, a patched file, an OS shell, a factual question. Forcing one runtime into the case would either over-couple the runner to AgentRuntime or hide the specifics each adapter needs. Cases carry their own runtime construction; the runner supplies metrics capture + threshold enforcement.
+- ALTERNATIVES_REJECTED: "All cases go through AgentRuntime" — doesn't fit pure memory-recall checks; "all cases are pure functions" — doesn't fit τ-bench's multi-turn conversation shape.
+- AFFECTS: `src/types.ts`, `src/runner.ts`.
+- CONFIDENCE: high.
+
+**DECISION:** Tiered suites are case-level tags (`tiers: readonly EvalTier[]`), not separate lists
+
+- REASONING: A memory-recall case belongs in smoke + regression + full; a GAIA Level-3 case belongs only in full. Tagging at the case level makes tier membership explicit in one place and avoids duplicating the same case across three suite exports.
+- AFFECTS: `src/types.ts` EvalCase.tiers.
+- CONFIDENCE: high.
+
+**DECISION:** Regression thresholds live in `src/thresholds.ts`, not `~/.hipp0/eval.json`
+
+- REASONING: A file in shared state means PR-A can lower the floor and PR-B inherits it without review. In-source thresholds force every PR that changes behavior to also edit the committed floor, with the PR description explaining the delta.
+- AFFECTS: `src/thresholds.ts`, CI gate semantics.
+- CONFIDENCE: high.
+
+**DECISION:** Cost / tool-call / safety signals flow via a runner-injected `RunCaptures` helper on `ctx.__captures`
+
+- REASONING: Cases shouldn't have to wrap their own result envelope with metrics; the runner already owns the collector. Attaching captures on the ctx (non-enumerable so debug stringifies stay clean) lets each case pull them with `getCaptures(ctx)` and report as it goes.
+- ALTERNATIVES_REJECTED: Return-value metadata — forces every adapter to build a result envelope; easy to forget to include counters. Global singletons — break parallelism + test isolation.
+- AFFECTS: `src/runner.ts`, every adapter's `run(ctx)`.
+- CONFIDENCE: medium.
+
+**DECISION:** Ship small built-in datasets per benchmark; full datasets are loaded via `taskToCase(task)`
+
+- REASONING: Shipping full τ-bench / SWE-bench / AgentBench / GAIA corpora would add hundreds of MB + churn the repo. Built-in tasks exercise the shape in CI. Ops teams point `taskToCase` at local clones for the weekly full suite.
+- AFFECTS: `src/benchmarks/*.ts`. Documented in the suite runner.
+- CONFIDENCE: high.
+
+**DECISION:** Publish-vs-OpenClaw comparisons + A/B infra + public leaderboard explicitly **cut** from v1
+
+- REASONING: Per `docs/PHASE_3_SCOPE.md`. Comparisons are legally risky; A/B belongs to Phase 22; leaderboard is post-launch operational work.
+- AFFECTS: Documentation, not code.
+- CONFIDENCE: high.
 
 ---
 

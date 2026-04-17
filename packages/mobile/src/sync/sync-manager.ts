@@ -1,9 +1,28 @@
 // packages/mobile/src/sync/sync-manager.ts
 // Coordinates the outbound queue + pull-side delta sync + local cache.
 // Storage is behind an interface so tests can run without expo-sqlite.
+//
+// Primitives live in @openhipp0/core/offline as of Phase 25 — this module
+// re-exports them so mobile callers keep a single local import surface
+// for both the manager and the underlying types.
 
-import { OutboundActionQueue, type QueuedAction, type QueuePersistence } from "./queue.js";
-import { resolveConflict, strategyForKind, type VersionedRecord } from "./conflict-resolver.js";
+import { offline } from "@openhipp0/core";
+
+const { OutboundActionQueue, resolveConflict, strategyForKind } = offline;
+type QueuedAction<T = unknown> = offline.QueuedAction<T>;
+type QueuePersistence = offline.QueuePersistence;
+type VersionedRecord = offline.VersionedRecord;
+type ActionHandler = offline.ActionHandler;
+
+export {
+  OutboundActionQueue,
+  resolveConflict,
+  strategyForKind,
+  type QueuedAction,
+  type QueuePersistence,
+  type VersionedRecord,
+  type ActionHandler,
+};
 
 export interface LocalCacheWriter {
   upsert<T extends VersionedRecord>(kind: string, record: T): Promise<void>;
@@ -35,7 +54,7 @@ export interface SyncManagerDeps {
 }
 
 export class SyncManager {
-  private readonly queue: OutboundActionQueue;
+  private readonly queue: offline.OutboundActionQueue;
   private readonly deps: SyncManagerDeps;
 
   constructor(deps: SyncManagerDeps) {
@@ -47,12 +66,12 @@ export class SyncManager {
     await this.queue.restore();
   }
 
-  async enqueueOutbound<T>(kind: string, payload: T) {
-    return this.queue.enqueue(kind, payload);
+  async enqueueOutbound<T>(kind: string, payload: T): Promise<QueuedAction<T>> {
+    return this.queue.enqueue(kind, payload) as QueuedAction<T>;
   }
 
-  /** Drain any pending outbound actions. Returns count processed. */
-  async flushOutbound(): Promise<{ processed: number; failed: number }> {
+  /** Drain any pending outbound actions. Returns counts for the drain pass. */
+  async flushOutbound(): Promise<{ processed: number; failed: number; dropped: number }> {
     return this.queue.drain(this.deps.actionHandler);
   }
 
@@ -69,7 +88,7 @@ export class SyncManager {
         continue;
       }
       if (local.updatedAt === remote.updatedAt) {
-        continue; // already up-to-date
+        continue;
       }
       conflicts++;
       const resolution = resolveConflict(local, remote, strategy);
@@ -93,6 +112,6 @@ export class SyncManager {
   }
 
   get pendingOutbound(): number {
-    return this.queue.size;
+    return this.queue.size();
   }
 }

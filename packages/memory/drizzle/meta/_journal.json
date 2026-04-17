@@ -8,6 +8,34 @@
       "when": 1776292448949,
       "tag": "0000_lame_lilandra",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1776369599080,
+      "tag": "0001_military_swordsman",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1776392000000,
+      "tag": "0002_reflection_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1776393000000,
+      "tag": "0003_plans",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1776394000000,
+      "tag": "0004_user_feedback",
+      "breakpoints": true
     }
   ]
 }

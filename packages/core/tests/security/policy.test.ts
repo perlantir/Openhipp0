@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { enforce, getTemplate, ALWAYS_BLOCKED_PATHS } from '../../src/security/index.js';
 
@@ -81,6 +82,78 @@ describe('ALWAYS_BLOCKED_PATHS', () => {
     expect(ALWAYS_BLOCKED_PATHS).toContain('~/.aws/**');
     expect(ALWAYS_BLOCKED_PATHS).toContain('~/.gnupg/**');
     expect(ALWAYS_BLOCKED_PATHS).toContain('~/.hipp0/secrets/**');
+  });
+});
+
+describe('path-block traversal hardening (Phase 3-H4)', () => {
+  const permissive = { ...getTemplate('permissive'), allowedPaths: ['/**'] };
+
+  it('blocks `~/.ssh` with no trailing slash (directory itself)', () => {
+    const r = enforce(permissive, {
+      toolName: 'file_read',
+      requiredPermissions: ['fs.read'],
+      paths: ['~/.ssh'],
+    });
+    expect(r.allowed).toBe(false);
+    expect(r.deniedBy).toBe('path');
+  });
+
+  it('blocks `~/foo/../.ssh/id_rsa` (home-relative traversal)', () => {
+    const r = enforce(permissive, {
+      toolName: 'file_read',
+      requiredPermissions: ['fs.read'],
+      paths: ['~/foo/../.ssh/id_rsa'],
+    });
+    expect(r.allowed).toBe(false);
+    expect(r.deniedBy).toBe('path');
+  });
+
+  it('blocks absolute traversal into the home blocked root', () => {
+    const home = homedir();
+    const r = enforce(permissive, {
+      toolName: 'file_read',
+      requiredPermissions: ['fs.read'],
+      paths: [`/tmp/../${home.replace(/^\//, '')}/.ssh/id_rsa`],
+    });
+    expect(r.allowed).toBe(false);
+    expect(r.deniedBy).toBe('path');
+  });
+
+  it('allows unrelated paths near the home dir (e.g. ~/notes.md)', () => {
+    const r = enforce(permissive, {
+      toolName: 'file_read',
+      requiredPermissions: ['fs.read'],
+      paths: ['~/notes.md'],
+    });
+    expect(r.allowed).toBe(true);
+  });
+
+  it('blocks nested files under the root (~/.ssh/config, ~/.aws/credentials)', () => {
+    for (const p of ['~/.ssh/config', '~/.aws/credentials', '~/.gnupg/random_seed']) {
+      const r = enforce(permissive, {
+        toolName: 'file_read',
+        requiredPermissions: ['fs.read'],
+        paths: [p],
+      });
+      expect(r.allowed, `expected ${p} blocked`).toBe(false);
+    }
+  });
+
+  it('does NOT block look-alike paths (~/.ssh-public/* / ~/notes/.ssh-notes)', () => {
+    // Prefix match requires a trailing separator — `~/.ssh-public/x` must
+    // not be caught by the `~/.ssh` guard.
+    const r1 = enforce(permissive, {
+      toolName: 'file_read',
+      requiredPermissions: ['fs.read'],
+      paths: ['~/.ssh-public/host_key.pub'],
+    });
+    expect(r1.allowed).toBe(true);
+    const r2 = enforce(permissive, {
+      toolName: 'file_read',
+      requiredPermissions: ['fs.read'],
+      paths: ['~/notes/.ssh-notes.md'],
+    });
+    expect(r2.allowed).toBe(true);
   });
 });
 

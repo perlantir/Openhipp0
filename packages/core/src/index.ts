@@ -16,6 +16,9 @@ export * as tools from './tools/index.js';
 /** Agent runtime loop. */
 export * as agent from './agent/index.js';
 
+/** Streaming-first runtime + event protocol (G2). */
+export * as streaming from './streaming/index.js';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Top-level re-exports — the handful of types that cross package boundaries
 // (memory package's MemoryAdapter implementation, external SDK consumers).
@@ -77,6 +80,25 @@ export * as enterprise from './enterprise/index.js';
 
 /** Training data pipeline: trajectory export, batch runner, compression (Phase 15). */
 export * as training from './training/index.js';
+
+/** Phase 24 — AES-256-GCM encrypted backup + restore (local + S3-compatible). */
+export * as backup from './backup/index.js';
+
+/** Phase 25 — Offline mode primitives (outbound queue, conflict resolver, cache-first, local-LLM stub). */
+export * as offline from './offline/index.js';
+
+/** Phase 26 — Debuggability: structured error codes, debug bundle redactor, verbose agent trace. */
+export * as debuggability from './debuggability/index.js';
+
+/** Phase B1 — Reflection: rubric-gated self-critique + async outcome assessment. */
+export * as reflection from './reflection/index.js';
+
+/** Phase B6 — MCP server marketplace: signed bundles + posture diff + install ledger. */
+export * as mcpMarketplace from './mcp-marketplace/index.js';
+
+/** Phase B2 — Planning: complexity gate + evidence-validated step tracker. */
+export * as planning from './planning/index.js';
+
 
 // Ergonomic top-level re-exports for consumers (e2e, SDK).
 export {

@@ -1,8 +1,9 @@
-// packages/mobile/src/sync/conflict-resolver.ts
-// When offline edits conflict with server state, resolve deterministically.
-// Default strategy: "server-wins" for immutable records (decisions,
-// skills), "last-write-wins" for user-settable fields (preferences, agent
-// config tweaks, notes).
+/**
+ * Conflict resolution — deterministic strategies for merging offline
+ * writes against server state.
+ *
+ * Ported from packages/mobile/src/sync/conflict-resolver.ts.
+ */
 
 export interface VersionedRecord {
   id: string;
@@ -10,7 +11,7 @@ export interface VersionedRecord {
   [key: string]: unknown;
 }
 
-export type ConflictStrategy = "server-wins" | "last-write-wins";
+export type ConflictStrategy = 'server-wins' | 'last-write-wins';
 
 export interface ConflictResolution<T extends VersionedRecord> {
   winner: T;
@@ -22,31 +23,27 @@ export interface ConflictResolution<T extends VersionedRecord> {
 export function resolveConflict<T extends VersionedRecord>(
   local: T,
   remote: T,
-  strategy: ConflictStrategy = "server-wins",
+  strategy: ConflictStrategy = 'server-wins',
 ): ConflictResolution<T> {
   if (local.id !== remote.id) {
     throw new Error(`Cannot resolve — different ids: ${local.id} vs ${remote.id}`);
   }
-
-  if (strategy === "server-wins") {
+  if (strategy === 'server-wins') {
     return {
       winner: remote,
       loserDiscarded: local,
       strategy,
-      reason: "server-wins policy",
+      reason: 'server-wins policy',
     };
   }
-
-  // last-write-wins
   const localTs = Date.parse(local.updatedAt);
   const remoteTs = Date.parse(remote.updatedAt);
   if (!Number.isFinite(localTs) || !Number.isFinite(remoteTs)) {
-    // Fallback: prefer remote if any timestamp is malformed
     return {
       winner: remote,
       loserDiscarded: local,
-      strategy: "server-wins",
-      reason: "malformed timestamp → server-wins fallback",
+      strategy: 'server-wins',
+      reason: 'malformed timestamp → server-wins fallback',
     };
   }
   if (localTs > remoteTs) {
@@ -65,18 +62,25 @@ export function resolveConflict<T extends VersionedRecord>(
   };
 }
 
-/** Strategy selector per record kind. */
+/**
+ * Per-kind strategy selector. Extends the mobile default with the
+ * server-side record kinds (backup manifests, llm usage, audit events —
+ * all server-wins because they're immutable or monotonically-appended).
+ */
 export function strategyForKind(kind: string): ConflictStrategy {
   switch (kind) {
-    case "decision":
-    case "skill":
-    case "session":
-      return "server-wins";
-    case "preference":
-    case "agent-config":
-    case "user-note":
-      return "last-write-wins";
+    case 'decision':
+    case 'skill':
+    case 'session':
+    case 'audit-event':
+    case 'llm-usage':
+    case 'backup-manifest':
+      return 'server-wins';
+    case 'preference':
+    case 'agent-config':
+    case 'user-note':
+      return 'last-write-wins';
     default:
-      return "server-wins";
+      return 'server-wins';
   }
 }

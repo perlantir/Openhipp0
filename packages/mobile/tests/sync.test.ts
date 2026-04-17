@@ -3,11 +3,11 @@ import {
   OutboundActionQueue,
   type QueuePersistence,
   type QueuedAction,
-} from "../src/sync/queue.js";
+} from "../src/sync/sync-manager.js";
 import {
   resolveConflict,
   strategyForKind,
-} from "../src/sync/conflict-resolver.js";
+} from "../src/sync/sync-manager.js";
 import { SyncManager, type LocalCacheWriter, type RemotePullClient } from "../src/sync/sync-manager.js";
 
 function mkPersistence(): { store: QueuedAction[]; p: QueuePersistence } {
@@ -32,14 +32,14 @@ describe("OutboundActionQueue", () => {
 
     await q.enqueue("send-message", { text: "hi" });
     await q.enqueue("send-message", { text: "again" });
-    expect(q.size).toBe(2);
+    expect(q.size()).toBe(2);
 
     const processed: unknown[] = [];
     await q.drain(async (a) => {
       processed.push(a.payload);
     });
     expect(processed).toEqual([{ text: "hi" }, { text: "again" }]);
-    expect(q.size).toBe(0);
+    expect(q.size()).toBe(0);
   });
 
   it("stops draining on first failure and increments attempts", async () => {
@@ -51,10 +51,10 @@ describe("OutboundActionQueue", () => {
     const handler = vi.fn(async () => {
       throw new Error("nope");
     });
-    const { processed, failed } = await q.drain(handler);
+    const { processed, failed } = await q.drain(handler, { stopOnFirstFailure: true });
     expect(processed).toBe(0);
     expect(failed).toBe(1);
-    expect(q.size).toBe(2);
+    expect(q.size()).toBe(2);
     expect(q.peek()[0]?.attempts).toBe(1);
     expect(q.peek()[0]?.lastError).toBe("nope");
     expect(handler).toHaveBeenCalledTimes(1); // stops on first fail
@@ -78,7 +78,7 @@ describe("OutboundActionQueue", () => {
 
     const q2 = new OutboundActionQueue({}, p);
     await q2.restore();
-    expect(q2.size).toBe(2);
+    expect(q2.size()).toBe(2);
     expect(q2.peek()[0]?.payload).toBe("one");
   });
 });

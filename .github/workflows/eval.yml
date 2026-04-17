@@ -1,0 +1,83 @@
+name: eval
+on:
+  pull_request:
+    paths:
+      - 'packages/eval/**'
+      - 'packages/core/src/llm/**'
+      - 'packages/memory/src/learning/**'
+  schedule:
+    # Nightly regression on main at 04:00 UTC.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Tier to run: smoke | regression | full'
+        required: true
+        default: 'regression'
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openhipp0/eval build
+      - name: Run smoke tier
+        run: pnpm --filter @openhipp0/eval test:smoke
+
+  regression:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.tier == 'regression')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      HIPP0_EVAL_CORPUS_DIR: /tmp/corpora
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openhipp0/eval build
+      - name: Fetch corpora
+        run: bash packages/eval/scripts/download-corpora.sh
+      - name: Run regression tier
+        run: pnpm --filter @openhipp0/eval run:regression
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-regression-${{ github.run_number }}
+          path: packages/eval/results/
+
+  full:
+    if: github.event_name == 'workflow_dispatch' && inputs.tier == 'full'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      HIPP0_EVAL_CORPUS_DIR: /tmp/corpora
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.33.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openhipp0/eval build
+      - name: Fetch corpora (real)
+        run: bash packages/eval/scripts/download-corpora.sh
+      - name: Run full tier
+        run: pnpm --filter @openhipp0/eval run:full
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-full-${{ github.run_number }}
+          path: packages/eval/results/

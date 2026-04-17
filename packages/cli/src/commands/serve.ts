@@ -10,12 +10,17 @@
  * so ops can flip them on from env without editing code.
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage as HttpIncomingMessage } from 'node:http';
 import {
   Hipp0HttpServer,
   WebBridge,
+  createRateLimiter,
   type IncomingMessage,
   type OutgoingMessage,
   type Route,
+  type PreRouteMiddleware,
+  type WebAuthenticator,
 } from '@openhipp0/bridge';
 import type { CommandResult } from '../types.js';
 import { buildVoiceRoutes } from './voice-routes.js';
@@ -24,6 +29,21 @@ import { buildWidgetsRoutes } from './widgets-routes.js';
 import { buildApiAuth, type ApiKeyResolver, type AuthMiddleware } from './api-auth.js';
 import { buildRlsMiddleware, chainMiddleware, type RlsDb } from './rls-middleware.js';
 import { buildPairingRoutes } from './pairing-routes.js';
+import {
+  buildAgentMessageHandler,
+  inferProvidersFromState,
+  type AgentMessageHandler,
+} from './build-agent.js';
+import { defaultEnvPath, upsertEnvKey } from '../env-writer.js';
+import type { llm } from '@openhipp0/core';
+import { z } from 'zod';
+type ProviderConfig = llm.ProviderConfig;
+
+const UpdateLlmBody = z.object({
+  provider: z.enum(['anthropic', 'openai', 'ollama']),
+  apiKey: z.string().min(8).max(512).optional(),
+  model: z.string().min(1).max(128).optional(),
+});
 
 export interface ServeOptions {
   port?: number;
@@ -46,6 +66,13 @@ export interface ServeOptions {
   onMessage?: (msg: IncomingMessage) => Promise<OutgoingMessage | undefined> | OutgoingMessage | undefined;
   /** Pre-built routeTable for tests / advanced wiring. */
   routeTable?: readonly Route[];
+  /**
+   * Per-IP rate limiter. Default: 40 burst / 20s window (≈ 120 req/min).
+   * Set to `false` to disable (dev only). `allowedOrigins` drives CORS +
+   * WS Origin allowlist; default [] = same-origin only.
+   */
+  rateLimit?: { capacity?: number; windowMs?: number } | false;
+  allowedOrigins?: readonly string[];
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> {
@@ -77,7 +104,9 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
       }),
     });
     const auth = chainMiddleware(baseAuth, rls);
-    const configRoutes = buildConfigRoutes(auth);
+    const configRoutes = buildConfigRoutes(auth, {
+      agentReloadProviders: built.agentReloadProviders,
+    });
     // /api/health aliases /health so browsers can reach it through the
     // dashboard's /api/* proxy (the root /health can't be proxied without
     // shadowing the React Router route of the same name).
@@ -126,10 +155,28 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
     closeDb = built.close;
   }
 
+  const preRouteMiddlewares: PreRouteMiddleware[] = [];
+  if (opts.rateLimit !== false) {
+    preRouteMiddlewares.push(
+      createRateLimiter({
+        capacity: opts.rateLimit?.capacity ?? 40,
+        windowMs: opts.rateLimit?.windowMs ?? 20_000,
+      }),
+    );
+  }
+
+  const allowedOrigins =
+    opts.allowedOrigins ??
+    (process.env['HIPP0_ALLOWED_ORIGINS']
+      ? process.env['HIPP0_ALLOWED_ORIGINS'].split(',').map((s) => s.trim()).filter(Boolean)
+      : []);
+
   const server = new Hipp0HttpServer({
     port,
     host,
     routeTable,
+    preRouteMiddlewares,
+    allowedOrigins,
     healthProbe: () => ({
       status: 'ok',
       checks: [],
@@ -150,10 +197,34 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
   if (enableWs) {
     const http = server.getHttpServer();
     if (http) {
-      webBridge = new WebBridge({ httpServer: http, path: '/ws', attachOnly: true });
-      const handler =
+      // WS authenticator — bearer token on query string (?token=...) since
+      // browsers can't set Authorization headers on WS upgrades. Uses
+      // constant-time compare against the API token.
+      const apiToken = opts.apiToken ?? process.env['HIPP0_API_TOKEN'];
+      const wsAuthenticator = apiToken ? buildWsAuthenticator(apiToken) : undefined;
+      const allowAnonymousWs = !apiToken && envFlag(process.env['HIPP0_WS_ANONYMOUS']);
+      webBridge = new WebBridge({
+        httpServer: http,
+        path: '/ws',
+        attachOnly: true,
+        allowedOrigins,
+        ...(wsAuthenticator && { authenticate: wsAuthenticator }),
+        // If we have an API token the WS authenticator gates; otherwise
+        // anonymous-by-env only (defaults off for safety).
+        ...(!apiToken && { allowAnonymous: allowAnonymousWs }),
+      });
+      // Handler resolution order (first wins):
+      //   1. opts.onMessage (explicit programmatic caller)
+      //   2. HIPP0_AGENT_MODULE dynamic import (external plug-in)
+      //   3. AgentRuntime auto-wired from env LLM keys (when present)
+      //   4. echo responder (dev fallback)
+      const handler:
+        | AgentMessageHandler
+        | NonNullable<ServeOptions['onMessage']>
+        | ((m: IncomingMessage) => OutgoingMessage) =
         opts.onMessage ??
         (await loadAgentModule(process.env['HIPP0_AGENT_MODULE'])) ??
+        (await maybeBuildAgent()) ??
         echoResponder;
       webBridge.onMessage(async (msg) => {
         const reply = await handler(msg);
@@ -191,14 +262,36 @@ export async function runServe(opts: ServeOptions = {}): Promise<CommandResult> 
  * Scheduler / Agents / Settings pages have something to render. We sanitize
  * by dropping anything under `llm.apiKey`-like fields even though the
  * current config schema doesn't store them (future-proofing).
+ *
+ * Also mounts `POST /api/config/llm` — dashboard / mobile use this to
+ * rotate the API key + switch provider/model at runtime. The handler
+ * persists the key to `.env` (mode 600) and non-secret fields to
+ * `config.json`, then calls the injected `agentReloadProviders` hook so
+ * in-flight providers hot-swap without a daemon restart.
  */
-function buildConfigRoutes(auth: AuthMiddleware): readonly Route[] {
+export interface ConfigRouteOptions {
+  agentReloadProviders?: (next: readonly ProviderConfig[]) => void;
+  /** Override for tests — defaults to the live .env + config paths. */
+  paths?: {
+    configPath?: string;
+    envPath?: string;
+  };
+  /** Override for tests — defaults to real process.env. */
+  env?: NodeJS.ProcessEnv;
+}
+
+export function buildConfigRoutes(
+  auth: AuthMiddleware,
+  routeOpts: ConfigRouteOptions = {},
+): readonly Route[] {
   const wrap = auth;
 
   const loadConfig = async (): Promise<Record<string, unknown>> => {
     const { readConfig } = await import('../config.js');
-    const cfg = (await readConfig()) as unknown as Record<string, unknown>;
-    // Defensive redact — only fields we know are safe ship out.
+    const cfgPath = routeOpts.paths?.configPath;
+    const cfg = (await (cfgPath
+      ? readConfig(cfgPath)
+      : readConfig())) as unknown as Record<string, unknown>;
     return sanitizeConfig(cfg);
   };
 
@@ -224,20 +317,126 @@ function buildConfigRoutes(auth: AuthMiddleware): readonly Route[] {
         return { body: cfg['cronTasks'] ?? [] };
       }),
     },
+    {
+      method: 'POST',
+      path: '/api/config/llm',
+      handler: wrap(async (ctx) => {
+        const parsed = UpdateLlmBody.safeParse(ctx.body ?? {});
+        if (!parsed.success) {
+          return {
+            status: 400,
+            body: {
+              error: 'invalid body',
+              issues: parsed.error.issues.map((i) => ({
+                path: i.path.join('.'),
+                message: i.message,
+              })),
+            },
+          };
+        }
+        const { provider, apiKey, model } = parsed.data;
+
+        // Persist non-secret fields to config.json.
+        const { readConfig, writeConfig, defaultConfigPath } = await import(
+          '../config.js'
+        );
+        const cfgPath = routeOpts.paths?.configPath ?? defaultConfigPath();
+        const cfg = await readConfig(cfgPath);
+        const nextCfg = {
+          ...cfg,
+          llm: {
+            provider,
+            ...(model !== undefined ? { model } : cfg.llm?.model ? { model: cfg.llm.model } : {}),
+          },
+        };
+        await writeConfig(nextCfg, cfgPath);
+
+        // Persist secret to .env (mode 600). Anthropic + OpenAI have keys;
+        // Ollama does not (local runtime — ignore any apiKey sent for it).
+        const env = routeOpts.env ?? process.env;
+        const envPath = routeOpts.paths?.envPath ?? defaultEnvPath();
+        let apiKeyUpdated = false;
+        if (apiKey && (provider === 'anthropic' || provider === 'openai')) {
+          const keyName = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+          await upsertEnvKey(envPath, keyName, apiKey);
+          env[keyName] = apiKey;
+          apiKeyUpdated = true;
+        }
+
+        // Hot-swap the live LLMClient if one is wired.
+        if (routeOpts.agentReloadProviders) {
+          const next = inferProvidersFromState({ env, configLlm: nextCfg.llm });
+          if (next.length > 0) {
+            try {
+              routeOpts.agentReloadProviders(next);
+            } catch (err) {
+              return {
+                status: 500,
+                body: { error: 'reload failed', detail: (err as Error).message },
+              };
+            }
+          }
+        }
+
+        return {
+          body: {
+            ok: true,
+            llm: nextCfg.llm,
+            apiKeyUpdated,
+            hotSwapped: Boolean(routeOpts.agentReloadProviders),
+          },
+        };
+      }),
+    },
   ];
 }
 
+/**
+ * Defensive redact for config values bound for `/api/config`. Drops
+ * well-known secret-shaped keys AND redacts any string value that LOOKS
+ * like a credential (sk-ant-, ghp_, hipp0_ak_, JWT-like, long b64). Recurses
+ * into arrays (the previous implementation did not).
+ */
 function sanitizeConfig(cfg: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(cfg)) {
-    if (/key|secret|token|password/i.test(k)) continue;
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      out[k] = sanitizeConfig(v as Record<string, unknown>);
-    } else {
-      out[k] = v;
+  return sanitizeValue(cfg) as Record<string, unknown>;
+}
+
+const SENSITIVE_KEY = /key|secret|token|password|credential|auth|webhook|dsn|privatekey|client[_-]?id|connection/i;
+const SECRET_SHAPED = /(sk-ant-api0[0-9]-[A-Za-z0-9_-]{32,}|sk-proj-[A-Za-z0-9_-]{32,}|ghp_[A-Za-z0-9]{20,}|hipp0_ak_[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/;
+
+function sanitizeValue(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sanitizeValue);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (SENSITIVE_KEY.test(k)) continue;
+      out[k] = sanitizeValue(val);
     }
+    return out;
   }
-  return out;
+  if (typeof v === 'string' && SECRET_SHAPED.test(v)) return '<redacted>';
+  return v;
+}
+
+/**
+ * Build a WebSocket authenticator that accepts `?token=<bearer>` on the
+ * upgrade URL (browsers can't set Authorization on WS). Uses SHA-256 +
+ * `timingSafeEqual` so token comparison is constant-time.
+ */
+function buildWsAuthenticator(token: string): WebAuthenticator {
+  const expectedHash = Buffer.from(createHash('sha256').update(token).digest('hex'), 'hex');
+  return (req: HttpIncomingMessage) => {
+    const url = req.url ?? '';
+    const qIdx = url.indexOf('?');
+    if (qIdx < 0) return null;
+    const params = new URLSearchParams(url.slice(qIdx + 1));
+    const presented = params.get('token') ?? params.get('t');
+    if (!presented) return null;
+    const presentedHash = Buffer.from(createHash('sha256').update(presented).digest('hex'), 'hex');
+    if (presentedHash.length !== expectedHash.length) return null;
+    if (!timingSafeEqual(presentedHash, expectedHash)) return null;
+    return { id: `web:auth:${presented.slice(0, 6)}`, name: 'authenticated-web' };
+  };
 }
 
 async function buildApiRoutes(opts: {
@@ -247,15 +446,46 @@ async function buildApiRoutes(opts: {
   routes: Route[];
   close: () => void;
   rawDb: unknown;
+  agentReloadProviders: ((next: readonly ProviderConfig[]) => void) | undefined;
 }> {
   const memory = await import('@openhipp0/memory');
   const client = memory.db.createClient(
     opts.databaseUrl ? { databaseUrl: opts.databaseUrl } : undefined,
   );
   await memory.db.runMigrations(client);
+
+  // Build an agent handler for POST /api/v1/agent/chat if a provider key is
+  // in the env — otherwise the route returns 501 (honest: no agent wired).
+  let agentHandler: import('@openhipp0/memory').ApiRouteOptions['agentHandler'];
+  let agentReloadProviders: ((next: readonly ProviderConfig[]) => void) | undefined;
+  if (process.env['ANTHROPIC_API_KEY'] || process.env['OPENAI_API_KEY']) {
+    const built = await buildAgentMessageHandler({ db: client });
+    if (built) {
+      agentReloadProviders = built.reloadProviders;
+      agentHandler = async (req) => {
+        const syntheticMsg: IncomingMessage = {
+          platform: 'web',
+          id: `api-${Math.random().toString(36).slice(2, 10)}`,
+          channel: { id: `api:${req.projectId}:${req.userId ?? 'anon'}`, name: 'api', isDM: true },
+          user: { id: req.userId ?? 'api-user', name: 'api-user' },
+          text: req.message,
+          timestamp: Date.now(),
+          platformData: { frameType: 'message' },
+        };
+        const resp = await built.handler(syntheticMsg);
+        return {
+          text: resp?.text ?? '',
+          messages: [],
+          iterations: 1,
+        };
+      };
+    }
+  }
+
   const routes = memory.createApiRoutes({
     db: client,
     ...(opts.apiToken && { requireBearer: opts.apiToken }),
+    ...(agentHandler && { agentHandler }),
   });
   // The memory route shape is structurally compatible with bridge's Route —
   // both use { method, path, handler({params, query, body}) -> { status?, body? } }.
@@ -263,6 +493,7 @@ async function buildApiRoutes(opts: {
     routes: routes as unknown as Route[],
     close: () => memory.db.closeClient(client),
     rawDb: (client as unknown as { $client: unknown }).$client,
+    agentReloadProviders,
   };
 }
 
@@ -277,6 +508,36 @@ function echoResponder(msg: IncomingMessage): OutgoingMessage {
       ? `(echo) ${msg.text}`
       : '🦛 Open Hipp0 received your message — wire up a Gateway in production to route through AgentRuntime.',
   };
+}
+
+/**
+ * If an LLM provider env key is present + the API DB is available, build
+ * an AgentRuntime-backed handler. Returns undefined when unavailable so
+ * the caller falls through to the echo responder.
+ */
+async function maybeBuildAgent(): Promise<AgentMessageHandler | undefined> {
+  // Only auto-wire when a provider key is present — otherwise the handler
+  // construction returns undefined anyway and we save an fs open.
+  if (!process.env['ANTHROPIC_API_KEY'] && !process.env['OPENAI_API_KEY']) {
+    return undefined;
+  }
+  try {
+    // The memory module's Drizzle client is available; re-acquire it the
+    // same way buildApiRoutes does so we share the underlying SQLite.
+    const memory = await import('@openhipp0/memory');
+    const client = memory.db.createClient(
+      process.env['HIPP0_DATABASE_URL']
+        ? { databaseUrl: process.env['HIPP0_DATABASE_URL'] }
+        : undefined,
+    );
+    const built = await buildAgentMessageHandler({ db: client });
+    return built?.handler;
+  } catch (err) {
+    process.stderr.write(
+      `agent auto-wiring failed: ${err instanceof Error ? err.message : String(err)} — falling back to echo.\n`,
+    );
+    return undefined;
+  }
 }
 
 /**

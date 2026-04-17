@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { Hipp0HttpServer } from '../src/index.js';
+import { Hipp0HttpServer, createRateLimiter } from '../src/index.js';
 
 let svr: Hipp0HttpServer | undefined;
 
@@ -161,5 +161,131 @@ describe('Hipp0HttpServer', () => {
       body: '{not-json',
     });
     expect(resp.status).toBe(400);
+    const body = (await resp.json()) as { error: string };
+    // Opaque — no parser position leak.
+    expect(body.error).toBe('invalid JSON body');
+    expect(body.error).not.toMatch(/position|column|line/i);
+  });
+
+  // ─── Phase 3-H1 hardening ──────────────────────────────────────────────
+
+  it('sets security headers on every response', async () => {
+    svr = new Hipp0HttpServer({ port: 0 });
+    const { port } = await svr.start();
+    const resp = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(resp.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(resp.headers.get('x-frame-options')).toBe('DENY');
+    expect(resp.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(resp.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(resp.headers.get('strict-transport-security')).toContain('max-age');
+  });
+
+  it('assigns a correlation id (x-request-id) per response', async () => {
+    svr = new Hipp0HttpServer({ port: 0 });
+    const { port } = await svr.start();
+    const a = await fetch(`http://127.0.0.1:${port}/health`);
+    const b = await fetch(`http://127.0.0.1:${port}/health`);
+    const ra = a.headers.get('x-request-id');
+    const rb = b.headers.get('x-request-id');
+    expect(ra).toMatch(/^[0-9a-f-]{36}$/);
+    expect(rb).toMatch(/^[0-9a-f-]{36}$/);
+    expect(ra).not.toBe(rb);
+  });
+
+  it('returns opaque 500 with correlation id when a handler throws', async () => {
+    const errors: unknown[] = [];
+    svr = new Hipp0HttpServer({
+      port: 0,
+      routeTable: [
+        {
+          method: 'GET',
+          path: '/explode',
+          handler: () => {
+            throw new Error('SECRET_DB_ERROR: FOREIGN KEY constraint failed on users.id = 42');
+          },
+        },
+      ],
+      onError: (err) => {
+        errors.push(err);
+      },
+    });
+    const { port } = await svr.start();
+    const resp = await fetch(`http://127.0.0.1:${port}/explode`);
+    expect(resp.status).toBe(500);
+    const body = (await resp.json()) as { error: string; ref: string };
+    expect(body.error).toBe('internal error');
+    expect(body.ref).toMatch(/^[0-9a-f-]{36}$/);
+    // The detailed error MUST NOT reach the client.
+    expect(JSON.stringify(body)).not.toMatch(/FOREIGN|SECRET|users\.id/);
+    // But it MUST be logged internally.
+    expect(errors).toHaveLength(1);
+  });
+
+  it('handles OPTIONS preflight with 204 + CORS headers when origin allowed', async () => {
+    svr = new Hipp0HttpServer({ port: 0, allowedOrigins: ['http://127.0.0.1:5173'] });
+    const { port } = await svr.start();
+    const resp = await fetch(`http://127.0.0.1:${port}/any-path`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://127.0.0.1:5173', 'access-control-request-method': 'GET' },
+    });
+    expect(resp.status).toBe(204);
+    expect(resp.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:5173');
+    expect(resp.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('handles OPTIONS preflight with 204 but NO ACAO when origin not allowed', async () => {
+    svr = new Hipp0HttpServer({ port: 0, allowedOrigins: ['http://127.0.0.1:5173'] });
+    const { port } = await svr.start();
+    const resp = await fetch(`http://127.0.0.1:${port}/x`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example' },
+    });
+    expect(resp.status).toBe(204);
+    expect(resp.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('HEAD request returns headers but no body', async () => {
+    svr = new Hipp0HttpServer({ port: 0 });
+    const { port } = await svr.start();
+    const resp = await fetch(`http://127.0.0.1:${port}/health`, { method: 'HEAD' });
+    expect(resp.status).toBe(200);
+    expect(await resp.text()).toBe('');
+  });
+
+  it('rate limiter returns 429 after capacity is exhausted', async () => {
+    const t = 0;
+    const limiter = createRateLimiter({ capacity: 3, windowMs: 60_000, now: () => t });
+    svr = new Hipp0HttpServer({
+      port: 0,
+      preRouteMiddlewares: [limiter],
+      routeTable: [{ method: 'GET', path: '/hit', handler: () => ({ body: 'ok' }) }],
+    });
+    const { port } = await svr.start();
+    // First 3 pass…
+    for (let i = 0; i < 3; i++) {
+      const r = await fetch(`http://127.0.0.1:${port}/hit`);
+      expect(r.status).toBe(200);
+    }
+    // 4th should 429.
+    const blocked = await fetch(`http://127.0.0.1:${port}/hit`);
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('retry-after')).not.toBeNull();
+    // /health is exempt by default.
+    const health = await fetch(`http://127.0.0.1:${port}/health`);
+    expect(health.status).toBe(200);
+  });
+
+  it('rate limiter refills tokens over the window', () => {
+    let t = 0;
+    const limiter = createRateLimiter({ capacity: 2, windowMs: 1_000, now: () => t });
+    const req = { socket: { remoteAddress: '1.2.3.4' }, headers: {} };
+    // Burn both tokens.
+    expect(limiter({ req: req as never, method: 'GET', pathname: '/x', requestId: 'a' })).toBeUndefined();
+    expect(limiter({ req: req as never, method: 'GET', pathname: '/x', requestId: 'b' })).toBeUndefined();
+    const blocked = limiter({ req: req as never, method: 'GET', pathname: '/x', requestId: 'c' });
+    expect((blocked as { status: number }).status).toBe(429);
+    // Advance half the window — should have ~1 token.
+    t = 500;
+    expect(limiter({ req: req as never, method: 'GET', pathname: '/x', requestId: 'd' })).toBeUndefined();
   });
 });

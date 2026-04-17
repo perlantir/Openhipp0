@@ -219,12 +219,16 @@ export const memoryEntries = sqliteTable(
       .default('other'),
     sourceSessionId: text('source_session_id'),
     embedding: text('embedding'),
+    /** Phase 21 provenance tagging — nullable for back-compat with pre-21 rows. */
+    origin: text('origin'),
+    trust: text('trust', { enum: ['high', 'medium', 'low', 'untrusted'] }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => ({
     projectAgentIdx: index('memory_entries_project_agent_idx').on(t.projectId, t.agentId),
     userIdx: index('memory_entries_user_idx').on(t.userId),
+    trustIdx: index('memory_entries_trust_idx').on(t.trust),
   }),
 );
 
@@ -246,16 +250,185 @@ export const sessionHistory = sqliteTable(
     tokensUsed: integer('tokens_used').notNull().default(0),
     costUsd: real('cost_usd').notNull().default(0),
     lineageParentId: text('lineage_parent_id'),
+    /** Phase 21 provenance tagging — nullable for back-compat. */
+    origin: text('origin'),
+    trust: text('trust', { enum: ['high', 'medium', 'low', 'untrusted'] }),
     createdAt: createdAt(),
   },
   (t) => ({
     projectAgentIdx: index('session_history_project_agent_idx').on(t.projectId, t.agentId),
     lineageIdx: index('session_history_lineage_idx').on(t.lineageParentId),
+    trustIdx: index('session_history_trust_idx').on(t.trust),
   }),
 );
 
 export type SessionHistory = typeof sessionHistory.$inferSelect;
 export type NewSessionHistory = typeof sessionHistory.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reflection events — Phase B1
+//
+// Row-per-event audit log for agent self-critique + outcome assessment. The
+// runtime's `ReflectionAdapter` is where events originate; `persist` on the
+// ReflectionConfig writes here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const reflectionEvents = sqliteTable(
+  'reflection_events',
+  {
+    id: id(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    sessionId: text('session_id'),
+    turnIndex: integer('turn_index').notNull(),
+    kind: text('kind', { enum: ['critique', 'outcome'] }).notNull(),
+    rubricIssues: text('rubric_issues', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    llmInvoked: integer('llm_invoked', { mode: 'boolean' }).notNull().default(false),
+    critiqueScore: real('critique_score'),
+    accept: integer('accept', { mode: 'boolean' }),
+    revisionApplied: integer('revision_applied', { mode: 'boolean' }).notNull().default(false),
+    outcomeScore: real('outcome_score'),
+    reason: text('reason'),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    projectAgentIdx: index('reflection_events_project_agent_idx').on(t.projectId, t.agentId),
+    kindIdx: index('reflection_events_kind_idx').on(t.kind),
+    sessionIdx: index('reflection_events_session_idx').on(t.sessionId),
+  }),
+);
+
+export type ReflectionEvent = typeof reflectionEvents.$inferSelect;
+export type NewReflectionEvent = typeof reflectionEvents.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plans — Phase B2
+//
+// Explicit plan decomposition + progress tracking. `state` drives the
+// lifecycle (draft / active / paused / completed / abandoned). `steps` live
+// in a child table with FK back to plans.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const plans = sqliteTable(
+  'plans',
+  {
+    id: id(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id'),
+    goal: text('goal').notNull(),
+    state: text('state', {
+      enum: ['draft', 'active', 'paused', 'completed', 'abandoned'],
+    })
+      .notNull()
+      .default('active'),
+    currentStepId: text('current_step_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({
+    projectIdx: index('plans_project_idx').on(t.projectId),
+    stateIdx: index('plans_state_idx').on(t.state),
+  }),
+);
+
+export type Plan = typeof plans.$inferSelect;
+export type NewPlan = typeof plans.$inferInsert;
+
+export const planSteps = sqliteTable(
+  'plan_steps',
+  {
+    id: id(),
+    planId: text('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    parentStepId: text('parent_step_id'),
+    order: integer('order_index').notNull(),
+    description: text('description').notNull(),
+    status: text('status', {
+      enum: ['pending', 'in_progress', 'blocked', 'completed', 'skipped'],
+    })
+      .notNull()
+      .default('pending'),
+    evidence: text('evidence', { mode: 'json' }).$type<Record<string, unknown> | null>(),
+    startedAt: text('started_at'),
+    finishedAt: text('finished_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({
+    planIdx: index('plan_steps_plan_idx').on(t.planId),
+    statusIdx: index('plan_steps_status_idx').on(t.status),
+  }),
+);
+
+export type PlanStepRow = typeof planSteps.$inferSelect;
+export type NewPlanStep = typeof planSteps.$inferInsert;
+
+export const planRevisions = sqliteTable(
+  'plan_revisions',
+  {
+    id: id(),
+    planId: text('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(),
+    delta: text('delta', { mode: 'json' })
+      .$type<{ added: string[]; removed: string[] }>()
+      .notNull()
+      .default(sql`'{"added":[],"removed":[]}'`),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    planIdx: index('plan_revisions_plan_idx').on(t.planId),
+  }),
+);
+
+export type PlanRevisionRow = typeof planRevisions.$inferSelect;
+export type NewPlanRevision = typeof planRevisions.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// User feedback — Phase B3
+//
+// Closed-loop preference learning. Every 👍/👎 on an agent turn lands here;
+// the reward model aggregates into a per-skill latent score that factors
+// into skills-rank as a shadow signal.
+//
+// Privacy + hardening:
+//   - rating ∈ {-1, 0, +1}; no free-text content, only a short `reason` tag.
+//   - source: 'explicit' (user click) vs 'implicit' (trajectory-inferred).
+//   - skill_id is nullable so raw turn-level feedback can still flow in.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const userFeedback = sqliteTable(
+  'user_feedback',
+  {
+    id: id(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
+    sessionId: text('session_id'),
+    turnId: text('turn_id'),
+    skillId: text('skill_id'),
+    rating: integer('rating').notNull(),
+    reason: text('reason'),
+    source: text('source', { enum: ['explicit', 'implicit'] }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    projectIdx: index('user_feedback_project_idx').on(t.projectId),
+    skillIdx: index('user_feedback_skill_idx').on(t.skillId),
+    userIdx: index('user_feedback_user_idx').on(t.userId),
+    sessionIdx: index('user_feedback_session_idx').on(t.sessionId),
+  }),
+);
+
+export type UserFeedback = typeof userFeedback.$inferSelect;
+export type NewUserFeedback = typeof userFeedback.$inferInsert;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // User Modeling

@@ -15,6 +15,7 @@
  * invert the package-boundary matrix: memory cannot import bridge).
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { and, desc, eq } from 'drizzle-orm';
 import type { HipppoDb } from '../db/index.js';
@@ -26,7 +27,14 @@ import {
   type DecisionStatus,
 } from '../decisions/index.js';
 import { searchSessions, escapeFts5 } from '../recall/index.js';
-import { skills as skillsTable, auditLog as auditLogTable } from '../db/schema.js';
+import {
+  skills as skillsTable,
+  auditLog as auditLogTable,
+  llmUsage as llmUsageTable,
+  projects as projectsTable,
+  userFeedback as userFeedbackTable,
+} from '../db/schema.js';
+import { computeSkillReward } from '../learning/reward-model.js';
 
 // ─── route shape (structural; matches @openhipp0/bridge.Route) ───────────
 
@@ -67,6 +75,27 @@ const UpdateDecisionBody = z.object({
   status: z.enum(['active', 'superseded', 'rejected']).optional(),
 });
 
+const CreateProjectBody = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_.-]+$/)
+    .optional(),
+  name: z.string().min(1).max(256),
+});
+
+const FeedbackBody = z.object({
+  projectId: z.string().min(1),
+  userId: z.string().min(1).max(256),
+  sessionId: z.string().min(1).max(256).optional(),
+  turnId: z.string().min(1).max(256).optional(),
+  skillId: z.string().min(1).max(256).optional(),
+  rating: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
+  reason: z.string().max(200).optional(),
+  source: z.enum(['explicit', 'implicit']).default('explicit'),
+});
+
 // ─── factory ─────────────────────────────────────────────────────────────
 
 export interface ApiRouteOptions {
@@ -83,10 +112,109 @@ export interface ApiRouteOptions {
    *  through a mock req). Called with the handler context and must return
    *  true to allow the request. */
   authorize?: (ctx: ApiRouteContext & { authorization?: string }) => boolean;
+  /**
+   * Agent handler for POST /api/v1/agent/chat. When absent, the route
+   * returns 501 (not wired). Callers (serve.ts) construct this via
+   * buildAgentMessageHandler, threaded through.
+   */
+  agentHandler?: (req: AgentChatRequest) => Promise<AgentChatResponse>;
+  /** Idempotency cache for duplicate-key dedup (default: in-memory 60 s). */
+  idempotencyStore?: IdempotencyStore;
 }
+
+export interface AgentChatRequest {
+  projectId: string;
+  agentId?: string;
+  userId?: string;
+  message: string;
+  conversation?: readonly {
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+  }[];
+  /** Client-generated UUID for dedup. Optional but recommended. */
+  idempotencyKey?: string;
+}
+
+export interface AgentChatResponse {
+  text: string;
+  messages: readonly unknown[];
+  iterations: number;
+  toolCallsCount?: number;
+  stoppedReason?: string;
+}
+
+export interface IdempotencyStore {
+  get(key: string): Promise<AgentChatResponse | null> | AgentChatResponse | null;
+  set(key: string, value: AgentChatResponse, ttlMs: number): Promise<void> | void;
+}
+
+/** Default in-memory idempotency store — 60 s TTL, LRU-capped at 1024 keys. */
+export function createInMemoryIdempotencyStore(
+  opts: { ttlMs?: number; maxKeys?: number } = {},
+): IdempotencyStore {
+  const ttlMs = opts.ttlMs ?? 60_000;
+  const maxKeys = opts.maxKeys ?? 1024;
+  const map = new Map<string, { value: AgentChatResponse; expiresAt: number }>();
+  return {
+    get(key: string) {
+      const entry = map.get(key);
+      if (!entry) return null;
+      if (entry.expiresAt < Date.now()) {
+        map.delete(key);
+        return null;
+      }
+      return entry.value;
+    },
+    set(key: string, value: AgentChatResponse) {
+      if (map.size >= maxKeys) {
+        const firstKey = map.keys().next().value;
+        if (firstKey) map.delete(firstKey);
+      }
+      map.set(key, { value, expiresAt: Date.now() + ttlMs });
+    },
+  };
+}
+
+const defaultIdempotencyStore = createInMemoryIdempotencyStore();
 
 export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
   const routes: ApiRoute[] = [
+    {
+      method: 'POST',
+      path: '/api/projects',
+      async handler(ctx) {
+        try {
+          const input = CreateProjectBody.parse(ctx.body ?? {});
+          const values: { id?: string; name: string } = { name: input.name };
+          if (input.id) values.id = input.id;
+          const [row] = await opts.db.insert(projectsTable).values(values).returning();
+          return { status: 201, body: row };
+        } catch (err) {
+          // Collapse unique / FK violations into 409 rather than leaking DB text.
+          const msg = (err as Error).message ?? '';
+          if (/UNIQUE|SQLITE_CONSTRAINT|duplicate/i.test(msg)) {
+            return { status: 409, body: { error: 'project already exists' } };
+          }
+          throw err;
+        }
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/projects',
+      async handler() {
+        const rows = await opts.db
+          .select({
+            id: projectsTable.id,
+            name: projectsTable.name,
+            createdAt: projectsTable.createdAt,
+          })
+          .from(projectsTable)
+          .orderBy(desc(projectsTable.createdAt))
+          .limit(500);
+        return { body: rows };
+      },
+    },
     {
       method: 'POST',
       path: '/api/decisions',
@@ -124,7 +252,7 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
         const id = ctx.params['id'];
         if (!id) return { status: 400, body: { error: 'missing :id' } };
         const d = await getDecision(opts.db, id);
-        if (!d) return { status: 404, body: { error: 'decision not found', id } };
+        if (!d) return { status: 404, body: { error: 'decision not found' } };
         return { body: d };
       },
     },
@@ -136,7 +264,7 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
         if (!id) return { status: 400, body: { error: 'missing :id' } };
         const patch = UpdateDecisionBody.parse(ctx.body ?? {});
         const updated = await updateDecision(opts.db, id, patch);
-        if (!updated) return { status: 404, body: { error: 'decision not found', id } };
+        if (!updated) return { status: 404, body: { error: 'decision not found' } };
         return { body: updated };
       },
     },
@@ -218,6 +346,137 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
     },
     {
       method: 'GET',
+      path: '/api/costs',
+      async handler(ctx) {
+        const projectId = ctx.query['projectId'];
+        const agentId = ctx.query['agentId'];
+        const provider = ctx.query['provider'];
+        const limit = clampLimit(ctx.query['limit'], 200, 1000);
+        const conditions = [];
+        if (projectId) conditions.push(eq(llmUsageTable.projectId, projectId));
+        if (agentId) conditions.push(eq(llmUsageTable.agentId, agentId));
+        if (provider) conditions.push(eq(llmUsageTable.provider, provider));
+        const where = conditions.length > 0
+          ? (conditions.length === 1 ? conditions[0] : and(...conditions))
+          : undefined;
+        const rowsQuery = opts.db
+          .select({
+            id: llmUsageTable.id,
+            projectId: llmUsageTable.projectId,
+            agentId: llmUsageTable.agentId,
+            provider: llmUsageTable.provider,
+            model: llmUsageTable.model,
+            inputTokens: llmUsageTable.inputTokens,
+            outputTokens: llmUsageTable.outputTokens,
+            costUsd: llmUsageTable.costUsd,
+            createdAt: llmUsageTable.createdAt,
+          })
+          .from(llmUsageTable)
+          .orderBy(desc(llmUsageTable.createdAt))
+          .limit(limit);
+        const rows = await (where ? rowsQuery.where(where) : rowsQuery);
+
+        // Aggregate totals + per-provider + per-model breakdown.
+        let totalCostUsd = 0;
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        const byProvider = new Map<string, { costUsd: number; calls: number }>();
+        const byModel = new Map<string, { costUsd: number; calls: number }>();
+        for (const r of rows) {
+          totalCostUsd += r.costUsd ?? 0;
+          totalInputTokens += r.inputTokens ?? 0;
+          totalOutputTokens += r.outputTokens ?? 0;
+          const p = byProvider.get(r.provider) ?? { costUsd: 0, calls: 0 };
+          p.costUsd += r.costUsd ?? 0;
+          p.calls += 1;
+          byProvider.set(r.provider, p);
+          const mk = `${r.provider}:${r.model}`;
+          const m = byModel.get(mk) ?? { costUsd: 0, calls: 0 };
+          m.costUsd += r.costUsd ?? 0;
+          m.calls += 1;
+          byModel.set(mk, m);
+        }
+        return {
+          body: {
+            rows,
+            totals: { costUsd: totalCostUsd, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, calls: rows.length },
+            byProvider: [...byProvider.entries()].map(([name, v]) => ({ name, ...v })),
+            byModel: [...byModel.entries()].map(([name, v]) => ({ name, ...v })),
+          },
+        };
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/v1/agent/chat',
+      async handler(ctx) {
+        if (!opts.agentHandler) {
+          return {
+            status: 501,
+            body: { error: 'agent runtime not wired on this server' },
+          };
+        }
+        const body = ctx.body as AgentChatRequest | undefined;
+        if (!body || typeof body.projectId !== 'string' || typeof body.message !== 'string') {
+          return { status: 400, body: { error: 'projectId + message required' } };
+        }
+        const key = body.idempotencyKey;
+        if (key) {
+          const store = opts.idempotencyStore ?? defaultIdempotencyStore;
+          const cached = await store.get(key);
+          if (cached) return { status: 200, body: cached };
+        }
+        const resp = await opts.agentHandler(body);
+        if (key) {
+          const store = opts.idempotencyStore ?? defaultIdempotencyStore;
+          await store.set(key, resp, 60_000);
+        }
+        return { status: 200, body: resp };
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/feedback',
+      async handler(ctx) {
+        const input = FeedbackBody.parse(ctx.body ?? {});
+        // Rate-limit hint: one rating per (session, turn, user) combo.
+        // Enforcement is per-session; duplicates overwrite the previous row
+        // so late edits are explicit, not accumulated.
+        const values: {
+          projectId: string;
+          userId: string;
+          sessionId?: string;
+          turnId?: string;
+          skillId?: string;
+          rating: number;
+          reason?: string;
+          source: 'explicit' | 'implicit';
+        } = {
+          projectId: input.projectId,
+          userId: input.userId,
+          rating: input.rating,
+          source: input.source,
+          ...(input.sessionId && { sessionId: input.sessionId }),
+          ...(input.turnId && { turnId: input.turnId }),
+          ...(input.skillId && { skillId: input.skillId }),
+          ...(input.reason && { reason: input.reason }),
+        };
+        const [row] = await opts.db.insert(userFeedbackTable).values(values).returning();
+        return { status: 201, body: row };
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/skills/:id/rewards',
+      async handler(ctx) {
+        const skillId = ctx.params['id'];
+        if (!skillId) return { status: 400, body: { error: 'missing :id' } };
+        const reward = await computeSkillReward(opts.db, skillId);
+        return { body: reward };
+      },
+    },
+    {
+      method: 'GET',
       path: '/api/skills',
       async handler(ctx) {
         const projectId = ctx.query['projectId'];
@@ -247,26 +506,30 @@ export function createApiRoutes(opts: ApiRouteOptions): ApiRoute[] {
     },
   ];
 
-  // Bearer-auth wrapper if requested.
+  // Bearer-auth wrapper if requested. Uses constant-time comparison (SHA-256
+  // digests guarantee equal-length buffers for timingSafeEqual).
   if (opts.requireBearer) {
-    const token = opts.requireBearer;
+    const tokenHashHex = createHash('sha256').update(opts.requireBearer).digest('hex');
+    const tokenHashBuf = Buffer.from(tokenHashHex, 'hex');
     return routes.map((r) => ({
       ...r,
       async handler(ctx) {
-        // Caller passes the req so we can read headers. The bridge's adapter
-        // sets `ctx.query['_authorization']` to the raw header for us, but
-        // the standard Hipp0HttpServer path doesn't; we check `opts.authorize`
-        // as an escape hatch, otherwise read the raw Authorization header
-        // off the req object when the bridge exposes it.
         const reqAny = (ctx as unknown as { req?: { headers?: Record<string, string | undefined> } }).req;
         const raw = reqAny?.headers?.['authorization'] ?? undefined;
-        const expected = `Bearer ${token}`;
         if (opts.authorize) {
           const authCtx: ApiRouteContext & { authorization?: string } = { ...ctx };
           if (raw !== undefined) authCtx.authorization = raw;
           if (!opts.authorize(authCtx)) return { status: 401, body: { error: 'unauthorized' } };
-        } else if (raw !== expected) {
-          return { status: 401, body: { error: 'unauthorized' } };
+        } else {
+          const trimmed = raw?.trim();
+          if (!trimmed || !trimmed.toLowerCase().startsWith('bearer ')) {
+            return { status: 401, body: { error: 'unauthorized' } };
+          }
+          const presented = trimmed.slice(7).trim();
+          const presentedHash = Buffer.from(createHash('sha256').update(presented).digest('hex'), 'hex');
+          if (presentedHash.length !== tokenHashBuf.length || !timingSafeEqual(presentedHash, tokenHashBuf)) {
+            return { status: 401, body: { error: 'unauthorized' } };
+          }
         }
         return r.handler(ctx);
       },

@@ -65,11 +65,14 @@ export {
 export {
   Hipp0HttpServer,
   HttpError,
+  createRateLimiter,
   type Hipp0HttpServerConfig,
   type Route,
   type RouteHandler,
   type RouteHandlerContext,
   type RouteResponse,
+  type PreRouteMiddleware,
+  type RateLimitOptions,
 } from './http-server.js';
 export {
   withMediaEnrichment,
@@ -77,3 +80,28 @@ export {
   type MediaEnrichmentOptions,
   type AttachmentFetcher,
 } from './media.js';
+
+// G2: streaming adapter + sentence chunker for edit-less bridges.
+export {
+  formatStreamEvent,
+  SentenceChunker,
+  StreamingAccumulator,
+  type ChunkedEmitOpts,
+  type StreamingBridgeDeps,
+} from './streaming.js';
+
+// G3: new bridges + registry.
+export { IMessageBridge, type IMessageBridgeOptions, type IMessageRawPayload, type IMessageTransport } from './imessage.js';
+export { TeamsBridge, type TeamsActivity, type TeamsBridgeOptions, type TeamsTransport } from './teams.js';
+export { LineBridge, type LineBridgeOptions, type LineTransport, type LineWebhookEvent } from './line.js';
+export { TwitchBridge, type TwitchBridgeOptions, type TwitchRawMessage, type TwitchTransport } from './twitch.js';
+export { RocketChatBridge, type RocketChatBridgeOptions, type RocketChatRawMessage, type RocketChatTransport } from './rocket-chat.js';
+export { ZulipBridge, type ZulipBridgeOptions, type ZulipRawMessage, type ZulipTransport } from './zulip.js';
+export {
+  BridgeRegistry,
+  type BridgeFactory,
+  type BridgeHealth,
+  type BridgeHealthState,
+  type BridgeRegistryOptions,
+  type LoadedBridge,
+} from './registry.js';

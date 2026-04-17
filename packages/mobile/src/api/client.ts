@@ -131,6 +131,14 @@ export class ApiClient {
     });
   }
 
+  // LLM config (rotate provider / key / model from the Settings screen)
+  updateLlmConfig(body: UpdateLlmRequest): Promise<UpdateLlmResponse> {
+    return this.request<UpdateLlmResponse>("/api/config/llm", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
   // Pairing (mobile-initiated)
   completePairing(body: {
     pairingToken: string;
@@ -192,4 +200,16 @@ export interface MemorySearchHit {
   title: string;
   snippet: string;
   score: number;
+}
+export type LlmProvider = "anthropic" | "openai" | "ollama";
+export interface UpdateLlmRequest {
+  provider: LlmProvider;
+  apiKey?: string;
+  model?: string;
+}
+export interface UpdateLlmResponse {
+  ok: boolean;
+  llm: { provider: LlmProvider; model?: string };
+  apiKeyUpdated: boolean;
+  hotSwapped: boolean;
 }

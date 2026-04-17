@@ -71,7 +71,33 @@ describe('buildApiAuth', () => {
 
     const bad = await handler(ctx('Bearer hipp0_ak_bad'));
     expect(bad.status).toBe(401);
-    expect((bad.body as { reason: string }).reason).toBe('not-found');
+    // Bodies collapse to a generic error — no enumeration oracle.
+    expect(bad.body).toEqual({ error: 'unauthorized' });
+  });
+
+  it('calls onAuthFailure with IP + keyPrefix on reject, never the raw bearer', async () => {
+    const calls: Array<{ ip: string; keyPrefix: string | undefined; internalReason: string }> = [];
+    const auth = buildApiAuth({
+      staticToken: 'secret',
+      onAuthFailure: (evt) => {
+        calls.push(evt);
+      },
+    });
+    const handler = auth(okHandler());
+    const res = await handler({
+      ...ctx('Bearer hipp0_ak_wrong123'),
+      req: {
+        headers: { authorization: 'Bearer hipp0_ak_wrong123' },
+        socket: { remoteAddress: '10.0.0.5' },
+      },
+    });
+    expect(res.status).toBe(401);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.ip).toBe('10.0.0.5');
+    expect(calls[0]?.keyPrefix).toBe('hipp0_ak');
+    expect(calls[0]?.internalReason).toBe('invalid-token');
+    // Prefix must be 8 chars max (no full-bearer leak via audit hook).
+    expect((calls[0]?.keyPrefix ?? '').length).toBeLessThanOrEqual(8);
   });
 
   it('combined mode — agent-key takes precedence; static token as fallback', async () => {

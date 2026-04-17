@@ -17,6 +17,24 @@ export {
   type ModelPrice,
   type SpendEntry,
 } from './cost-tracker.js';
+export {
+  MODEL_CATALOG,
+  lookupModel,
+  costRatio,
+  isNearEol,
+  isDeprecated,
+  type ModelRecord,
+} from './model-catalog.js';
+export {
+  validateHotSwap,
+  CanaryRouter,
+  DEFAULT_COST_BUDGET_MULTIPLIER,
+  type HotSwapProposal,
+  type HotSwapVerdict,
+  type HotSwapReject,
+  type CanaryRouterOptions,
+  type CanaryDecision,
+} from './hot-swap.js';
 export { AnthropicProvider, type AnthropicProviderOptions } from './provider-anthropic.js';
 export { OpenAIProvider, type OpenAIProviderOptions } from './provider-openai.js';
 export { OllamaProvider, type OllamaProviderOptions, type FetchFn } from './provider-ollama.js';
@@ -27,3 +45,7 @@ export {
   type ProviderFactory,
   type UsageRecord,
 } from './client.js';
+
+// G4: provider expansion (OpenAI-compat factories + Gemini + Bedrock +
+// credential pool + models.dev registry).
+export * from './providers/index.js';

@@ -14,16 +14,21 @@ import type {
   BrowserPage,
 } from './types.js';
 
+const DEFAULT_MAX_CONCURRENT_PAGES = 3;
+
 export class BrowserEngine {
   private ctx: BrowserContext | undefined;
   private readonly launchOpts: BrowserLaunchOptions;
   private readonly driverProvider: () => Promise<BrowserDriver>;
+  private readonly maxPages: number;
+  private pageCount = 0;
 
-  constructor(config: BrowserEngineConfig = {}) {
+  constructor(config: BrowserEngineConfig & { maxConcurrentPages?: number } = {}) {
     this.launchOpts = config.launch ?? { headless: true };
     this.driverProvider = config.driver
       ? async () => config.driver!
       : defaultPlaywrightDriver;
+    this.maxPages = config.maxConcurrentPages ?? DEFAULT_MAX_CONCURRENT_PAGES;
   }
 
   async start(): Promise<void> {
@@ -34,7 +39,31 @@ export class BrowserEngine {
 
   async newPage(): Promise<BrowserPage> {
     if (!this.ctx) await this.start();
-    return this.ctx!.newPage();
+    if (this.pageCount >= this.maxPages) {
+      throw new Error(
+        `BrowserEngine: page cap reached (${this.pageCount}/${this.maxPages}); close a page or bump maxConcurrentPages.`,
+      );
+    }
+    this.pageCount++;
+    try {
+      const page = await this.ctx!.newPage();
+      // Decrement when caller closes — best effort; if the page has a close()
+      // hook, wrap it.
+      const originalClose = (page as unknown as { close?: () => Promise<void> }).close;
+      if (typeof originalClose === 'function') {
+        (page as unknown as { close: () => Promise<void> }).close = async () => {
+          try {
+            await originalClose.call(page);
+          } finally {
+            this.pageCount = Math.max(0, this.pageCount - 1);
+          }
+        };
+      }
+      return page;
+    } catch (err) {
+      this.pageCount = Math.max(0, this.pageCount - 1);
+      throw err;
+    }
   }
 
   async stop(): Promise<void> {
@@ -45,10 +74,15 @@ export class BrowserEngine {
       /* best effort */
     }
     this.ctx = undefined;
+    this.pageCount = 0;
   }
 
   isRunning(): boolean {
     return !!this.ctx;
+  }
+
+  openPageCount(): number {
+    return this.pageCount;
   }
 }
 

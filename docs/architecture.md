@@ -48,12 +48,15 @@
 | `scheduler` | `core`, `memory`                          | `bridge`, `dashboard`                                 |
 | `watchdog`  | `core`                                    | anything else (runs independently)                    |
 | `dashboard` | `sdk` only                                | `core`, `memory`, etc. directly                       |
-| `cli`       | `core`, `memory`, `scheduler`, `watchdog`, `bridge` | `dashboard`                                 |
-| `mcp`       | `core`, `memory`, `scheduler`, `watchdog` | `bridge`, `dashboard`                                 |
+| `cli`       | `core`, `memory`, `scheduler`, `watchdog`, `bridge`, `browser` | `dashboard`                        |
+| `mcp`       | `core`, `memory`, `scheduler`, `watchdog`, `browser` | `bridge`, `dashboard`                      |
+| `browser`   | `core` (primitives in `core/browser`)     | everything else                                       |
 | `sdk`       | `core`, `memory` (types only)             | `bridge`, `scheduler`, `watchdog`, `dashboard`, `cli` |
 
 Rationale: keeps the build graph linear, prevents circular imports, and
-lets the dashboard stay portable across SDK consumers.
+lets the dashboard stay portable across SDK consumers. `browser` (G1-a) holds
+higher-level automation capabilities (profiles, snapshots, workflows, multi-tab,
+site memory, network inspector) above `core/browser` primitives.
 
 ## Tech stack
 

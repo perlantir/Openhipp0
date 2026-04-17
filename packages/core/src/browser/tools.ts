@@ -16,7 +16,24 @@ import type { Tool } from '../tools/types.js';
 import { ActionExecutor } from './action-executor.js';
 import { analyzePage } from './page-analyzer.js';
 import type { BrowserEngine } from './engine.js';
+import {
+  createSystemResolver,
+  resolveAndGuard,
+  ssrfErrorCode,
+  type DnsResolver,
+} from './ssrf.js';
 import type { BrowserPage } from './types.js';
+
+export interface BrowserToolsOptions {
+  /** Optional DNS resolver — defaults to node:dns/promises. Inject for tests. */
+  readonly resolver?: DnsResolver;
+  /**
+   * Optional callback the tools use to ask "is this URL allowed?" before
+   * navigation. When absent, all URLs pass this gate (the SSRF guard still
+   * runs). Production callers should wire this to a policy engine.
+   */
+  readonly isUrlAllowed?: (url: string) => boolean;
+}
 
 /** Shared page — created lazily + reused across tool calls for the same engine. */
 interface PageHolder {
@@ -30,12 +47,18 @@ async function ensurePage(engine: BrowserEngine, holder: PageHolder): Promise<Br
   return holder.page;
 }
 
-export function createBrowserTools(engine: BrowserEngine): Tool<object>[] {
+export function createBrowserTools(
+  engine: BrowserEngine,
+  opts: BrowserToolsOptions = {},
+): Tool<object>[] {
   const holder: PageHolder = { page: undefined };
+  const resolver = opts.resolver ?? createSystemResolver();
+  const isUrlAllowed = opts.isUrlAllowed ?? (() => true);
 
   const navigate: Tool<{ url: string }> = {
     name: 'browser_navigate',
-    description: 'Navigate the browser to a URL.',
+    description:
+      'Navigate the browser to a URL. Guarded by an SSRF + DNS-rebind check: private/loopback/link-local addresses are blocked, and each call resolves DNS before connecting.',
     permissions: ['browser.use', 'net.fetch'],
     inputSchema: {
       type: 'object',
@@ -44,11 +67,29 @@ export function createBrowserTools(engine: BrowserEngine): Tool<object>[] {
     },
     validator: z.object({ url: z.string().url() }),
     async execute(params) {
+      if (!isUrlAllowed(params.url)) {
+        return {
+          ok: false,
+          output: 'URL blocked by policy',
+          errorCode: 'HIPP0_BROWSER_URL_BLOCKED_BY_POLICY',
+        };
+      }
+      const guard = await resolveAndGuard(params.url, resolver);
+      if (!guard.ok) {
+        return {
+          ok: false,
+          output: `${guard.error.kind}: ${guard.error.detail}`,
+          errorCode: ssrfErrorCode(guard.error.kind),
+        };
+      }
       const page = await ensurePage(engine, holder);
       const exec = new ActionExecutor(page);
-      const r = await exec.execute({ kind: 'navigate', url: params.url });
+      const r = await exec.execute({ kind: 'navigate', url: guard.resolution.url });
       return r.ok
-        ? { ok: true, output: `navigated to ${params.url}` }
+        ? {
+            ok: true,
+            output: `navigated to ${params.url} (pinned=${guard.resolution.ip})`,
+          }
         : { ok: false, output: r.error ?? 'navigation failed', errorCode: 'HIPP0_BROWSER_NAV' };
     },
   };

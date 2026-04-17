@@ -54,7 +54,77 @@ describe('WebBridge', () => {
     const msg = handler.mock.calls[0]![0];
     expect(msg.text).toBe('hello from client');
     expect(msg.platform).toBe('web');
-    expect(msg.id).toBe('m1');
+    // Server assigns the authoritative id — client id is kept as clientRef.
+    expect(msg.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(msg.platformData?.clientRef).toBe('m1');
+  });
+
+  it('rejects cross-origin WS upgrade when allowedOrigins is set', async () => {
+    await bridge.disconnect();
+    const originBridge = new WebBridge({
+      port: 0,
+      host: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:5173'],
+      allowAnonymous: true,
+    });
+    await originBridge.connect();
+    const p = (originBridge as unknown as { httpServer: { address(): { port: number } } })
+      .httpServer.address().port;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, { headers: { Origin: 'https://evil.example' } });
+    await new Promise<void>((resolve) => {
+      ws.once('error', () => resolve());
+      ws.once('close', () => resolve());
+    });
+    expect(ws.readyState).not.toBe(WebSocket.OPEN);
+    await originBridge.disconnect();
+  });
+
+  it('accepts allowed Origin via allowlist', async () => {
+    await bridge.disconnect();
+    const originBridge = new WebBridge({
+      port: 0,
+      host: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:5173'],
+      allowAnonymous: true,
+    });
+    await originBridge.connect();
+    const p = (originBridge as unknown as { httpServer: { address(): { port: number } } })
+      .httpServer.address().port;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, {
+      headers: { Origin: 'http://127.0.0.1:5173' },
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+    await originBridge.disconnect();
+  });
+
+  it('safe-by-default: rejects upgrade when allowedOrigins set + no authenticator + allowAnonymous=false', async () => {
+    await bridge.disconnect();
+    const strictBridge = new WebBridge({
+      port: 0,
+      host: '127.0.0.1',
+      allowedOrigins: ['http://127.0.0.1:5173'],
+      // allowAnonymous defaults to false because allowedOrigins is non-empty
+    });
+    await strictBridge.connect();
+    const p = (strictBridge as unknown as { httpServer: { address(): { port: number } } })
+      .httpServer.address().port;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, {
+      headers: { Origin: 'http://127.0.0.1:5173' },
+    });
+    const closeCode = await new Promise<number>((resolve) => {
+      ws.once('close', (code) => resolve(code));
+      ws.once('error', () => resolve(-1));
+    });
+    expect(closeCode).toBe(4401);
+    await strictBridge.disconnect();
   });
 
   it('send({text}) delivers a response frame to the correct channel', async () => {
